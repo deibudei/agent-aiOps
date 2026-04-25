@@ -1,0 +1,14 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.log
+logs/
+repair-records/
+server.pid
+
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+target-service/logs/
+agent-platform/logs/

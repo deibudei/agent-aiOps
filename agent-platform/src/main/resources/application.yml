@@ -1,0 +1,35 @@
+server:
+  port: 9901
+
+spring:
+  application:
+    name: agent-platform
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+dashscope:
+  api-key: ${DASHSCOPE_API_KEY:}
+  model: ${DASHSCOPE_MODEL:qwen-max}
+
+repair:
+  workspace-root: ${REPAIR_WORKSPACE_ROOT:${user.dir}}
+  target-project:
+    name: target-service
+    root-path: ${REPAIR_TARGET_ROOT:target-service}
+    log-path: ${REPAIR_TARGET_LOG:target-service/logs/target-service.log}
+    test-command: ${REPAIR_TEST_COMMAND:mvn -pl target-service test}
+  workflow:
+    max-repair-attempts: ${REPAIR_MAX_ATTEMPTS:3}
+    process-timeout-seconds: ${REPAIR_PROCESS_TIMEOUT_SECONDS:120}
+  git:
+    enabled: ${REPAIR_GIT_ENABLED:false}
+    remote: ${REPAIR_GIT_REMOTE:origin}
+    base-branch: ${REPAIR_BASE_BRANCH:main}
+  github:
+    enabled: ${REPAIR_GITHUB_ENABLED:false}
+  feishu:
+    enabled: ${FEISHU_ENABLED:false}
+    webhook-url: ${FEISHU_WEBHOOK_URL:}
+  llm:
+    enabled: ${REPAIR_LLM_ENABLED:false}

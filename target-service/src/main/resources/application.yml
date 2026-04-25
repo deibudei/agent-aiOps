@@ -1,0 +1,13 @@
+server:
+  port: 9910
+
+spring:
+  application:
+    name: target-service
+
+logging:
+  file:
+    name: logs/target-service.log
+  level:
+    root: INFO
+    com.example.targetservice: DEBUG
