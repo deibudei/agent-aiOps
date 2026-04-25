@@ -2,6 +2,7 @@ package org.example.agentaiops.repair.tool;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.Files;
 import java.util.List;
 import org.example.agentaiops.config.RepairProperties;
 import org.springframework.stereotype.Component;
@@ -17,7 +18,7 @@ public class ToolPolicy {
     private final Path targetLogsRoot;
 
     public ToolPolicy(RepairProperties properties) {
-        this.workspaceRoot = Paths.get(properties.getWorkspaceRoot()).toAbsolutePath().normalize();
+        this.workspaceRoot = discoverWorkspaceRoot(properties.getWorkspaceRoot());
         this.targetRoot = resolveTargetRoot(properties.getTargetProject().getRootPath());
         this.targetSourceRoot = targetRoot.resolve("src").normalize();
         this.targetMainRoot = targetRoot.resolve("src/main").normalize();
@@ -87,10 +88,33 @@ public class ToolPolicy {
 
         Path targetRootName = targetRoot.getFileName();
         if (targetRootName != null && raw.getNameCount() > 0 && raw.getName(0).equals(targetRootName)) {
-            return fromWorkspace;
+            if (raw.getNameCount() == 1) {
+                return targetRoot;
+            }
+            return targetRoot.resolve(raw.subpath(1, raw.getNameCount())).toAbsolutePath().normalize();
         }
 
         return targetRoot.resolve(path).toAbsolutePath().normalize();
+    }
+
+    private Path discoverWorkspaceRoot(String configuredRoot) {
+        Path configured = Paths.get(configuredRoot).toAbsolutePath().normalize();
+        if (isWorkspaceRoot(configured)) {
+            return configured;
+        }
+
+        Path parent = configured.getParent();
+        if (parent != null && isWorkspaceRoot(parent)) {
+            return parent;
+        }
+
+        return configured;
+    }
+
+    private boolean isWorkspaceRoot(Path path) {
+        return Files.exists(path.resolve("pom.xml"))
+                && Files.exists(path.resolve("agent-platform/pom.xml"))
+                && Files.exists(path.resolve("target-service/pom.xml"));
     }
 
     private Path resolveWorkspacePath(String path) {

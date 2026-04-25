@@ -32,6 +32,40 @@ Required demo loop:
 - `agent-platform` is the Agent backend.
 - Frontend is intentionally deferred until backend flow is stable.
 - GitHub PR and Feishu are implemented but disabled by default.
+- Repair records should be written under repo-root `repair-records/`.
+- If records appear under `agent-platform/repair-records/`, the running backend is stale or the workspace root was misdetected; restart `agent-platform` from repo root.
+- Keep `README.zh-CN.md`, `README.md`, and this `AGENTS.md` updated whenever project architecture, commands, environment variables, demo flow, or Agent capability status changes.
+- Current Agent maturity: the workflow is wired, but planning/execution is still scenario-specific and should be upgraded into a real LLM/tool-driven repair Agent.
+
+## Local Skill Setup
+
+Useful local skills for the next phase:
+
+- Preinstalled/available: `openai-docs`, `skill-creator`, `mcp-builder`, GitHub plugin skills, `webapp-testing`.
+- Installed on 2026-04-25 from `openai/skills` curated: `gh-address-comments`, `gh-fix-ci`, `yeet`, `sentry`, `security-threat-model`.
+- `superpowers` was requested on 2026-04-25, but the local path is a broken junction to `C:\Users\wuyib\.codex\superpowers`; do not rely on it until that target is restored.
+- Restart Codex after installing new skills so newly installed skills are picked up by the session.
+
+## Next Phase: Real Agent Repair
+
+Replace the hard-coded repair path with a true Agent loop:
+
+- Read traceback/log evidence and failing tests.
+- Ask an LLM to produce a structured root-cause analysis and repair plan.
+- Let the Agent choose tools from a strict registry instead of hard-coding `OrderService`.
+- Generate a structured patch proposal, validate paths through `ToolPolicy`, apply it, and run tests.
+- Review diff/test output with policy checks before GitHub PR and Feishu notification.
+- Persist repair records and reflection for future retrieval/RAG.
+
+Implementation order:
+
+1. Define the Agent contract: `EvidenceBundle`, `RepairAnalysis`, `RepairPlan`, `PatchProposal`, and strict JSON schemas.
+2. Add `LlmClient` for DashScope/Qwen HTTP calls, with timeout, retry, disabled-mode behavior, and structured JSON parsing.
+3. Replace `RepairPlannerAgent` hard-coded logic with LLM analysis based on traceback, failing tests, and selected source snippets.
+4. Replace `RepairExecutorAgent` hard-coded string replacement with patch proposal application through `PatchTools` and `ToolPolicy`.
+5. Strengthen review gates: reject unparseable model output, empty diff, out-of-whitelist paths, failing tests, and changes outside `target-service/src/main` or `target-service/src/test`.
+6. Update repair records to include model input summary, model output, patch proposal, retry history, final diff, and reflection.
+7. Keep a deterministic demo reset path, preferably a `demo-bug` branch or documented manual reset, so the competition demo can be replayed.
 
 ## Modules
 

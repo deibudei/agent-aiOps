@@ -24,7 +24,7 @@ public class GitTools {
 
     public String readTargetDiff() {
         CommandResult result = runGit("diff", "--", "target-service");
-        return result.output();
+        return stripGitWarnings(result.output());
     }
 
     public List<String> changedTargetFiles() {
@@ -32,10 +32,26 @@ public class GitTools {
         if (!result.success() || result.output().isBlank()) {
             return List.of();
         }
-        return Arrays.stream(result.output().split("\\R"))
+        return parseChangedFiles(result.output());
+    }
+
+    static List<String> parseChangedFiles(String output) {
+        return Arrays.stream(output.split("\\R"))
                 .map(String::trim)
                 .filter(value -> !value.isBlank())
+                .filter(value -> !isGitWarning(value))
                 .toList();
+    }
+
+    private static String stripGitWarnings(String output) {
+        return Arrays.stream(output.split("\\R"))
+                .filter(value -> !isGitWarning(value.trim()))
+                .reduce((left, right) -> left + System.lineSeparator() + right)
+                .orElse("");
+    }
+
+    private static boolean isGitWarning(String value) {
+        return value.startsWith("warning: ");
     }
 
     public GitCommitResult commitAndPush(String sessionId) {

@@ -30,4 +30,22 @@ class ToolPolicyTest {
         assertThatThrownBy(() -> policy.resolveForWrite("agent-platform/src/main/java/App.java"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void discoversRepositoryRootWhenStartedFromAgentModule() throws Exception {
+        Files.createFile(tempDir.resolve("pom.xml"));
+        Files.createDirectories(tempDir.resolve("agent-platform"));
+        Files.createFile(tempDir.resolve("agent-platform/pom.xml"));
+        Files.createDirectories(tempDir.resolve("target-service/src/main/java"));
+        Files.createFile(tempDir.resolve("target-service/pom.xml"));
+
+        RepairProperties properties = new RepairProperties();
+        properties.setWorkspaceRoot(tempDir.resolve("agent-platform").toString());
+
+        ToolPolicy policy = new ToolPolicy(properties);
+
+        assertThat(policy.workspaceRoot()).isEqualTo(tempDir.toAbsolutePath().normalize());
+        assertThat(policy.resolveForRead("target-service/src/main/java/App.java"))
+                .isEqualTo(tempDir.resolve("target-service/src/main/java/App.java").toAbsolutePath().normalize());
+    }
 }

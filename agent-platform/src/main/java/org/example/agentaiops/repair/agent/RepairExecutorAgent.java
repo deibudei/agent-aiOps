@@ -50,10 +50,10 @@ public class RepairExecutorAgent {
         steps.add(new RepairStepResult("ReadCodeTools", ORDER_SERVICE, summarize(code), code.success()));
 
         PatchResult patchResult = new PatchResult(false, ORDER_SERVICE, "Patch not attempted");
-        if (code.success() && code.output().contains("return totalCents / quantity;")) {
-            patchResult = patchTools.replaceInFile(ORDER_SERVICE, BUGGY_METHOD, FIXED_METHOD);
-        } else if (code.success() && code.output().contains("quantity must be greater than 0")) {
+        if (code.success() && code.output().contains("quantity must be greater than 0")) {
             patchResult = new PatchResult(true, ORDER_SERVICE, "Validation already present");
+        } else if (code.success() && code.output().contains("return totalCents / quantity;")) {
+            patchResult = patchTools.replaceInFile(ORDER_SERVICE, BUGGY_METHOD, FIXED_METHOD);
         }
         steps.add(new RepairStepResult("PatchTools", ORDER_SERVICE, patchResult.message(), patchResult.success()));
 

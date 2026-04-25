@@ -6,6 +6,9 @@ import org.springframework.stereotype.Service;
 public class OrderService {
 
     public int calculateUnitPrice(int totalCents, int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("quantity must be greater than 0");
+        }
         return totalCents / quantity;
     }
 }
