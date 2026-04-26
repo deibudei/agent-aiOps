@@ -15,11 +15,13 @@ public class RepairRecordTools {
     private final ToolPolicy toolPolicy;
     private final ObjectMapper objectMapper;
 
+    /** Prepares record writing with workspace paths and Java time JSON support. */
     public RepairRecordTools(ToolPolicy toolPolicy, ObjectMapper objectMapper) {
         this.toolPolicy = toolPolicy;
         this.objectMapper = objectMapper.copy().registerModule(new JavaTimeModule());
     }
 
+    /** Writes the repair record as both JSON for machines and Markdown for demos. */
     public ToolExecutionResult writeRecord(RepairRecord record) {
         try {
             Path recordsDir = toolPolicy.workspaceRoot().resolve("repair-records").normalize();
@@ -35,6 +37,7 @@ public class RepairRecordTools {
         }
     }
 
+    /** Converts the main repair facts into a readable Markdown report. */
     private String toMarkdown(RepairRecord record) {
         String pr = record.pullRequestResult() == null ? "" : record.pullRequestResult().url();
         return """
@@ -49,7 +52,15 @@ public class RepairRecordTools {
 
                 %s
 
+                ## Evidence Summary
+
+                %s
+
                 ## Plan
+
+                %s
+
+                ## Patch Proposal
 
                 %s
 
@@ -74,7 +85,9 @@ public class RepairRecordTools {
                 record.completedAt(),
                 pr,
                 record.tracebackSummary(),
+                record.evidenceBundle() == null ? "" : record.evidenceBundle().summary(),
                 record.plan(),
+                record.patchProposal() == null ? "" : record.patchProposal(),
                 trim(record.diffSummary(), 4000),
                 record.reviewDecision(),
                 record.reflection().rootCause(),
@@ -82,6 +95,7 @@ public class RepairRecordTools {
                 record.reflection().lessonsLearned());
     }
 
+    /** Trims long diff or evidence text for Markdown readability. */
     private String trim(String value, int maxLength) {
         if (value == null || value.length() <= maxLength) {
             return value == null ? "" : value;

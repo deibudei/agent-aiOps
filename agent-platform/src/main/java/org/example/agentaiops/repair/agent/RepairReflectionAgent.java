@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class RepairReflectionAgent {
 
+    /** Summarizes the repair outcome into reusable lessons and follow-up hints. */
     public RepairReflection reflect(
             String evidence, RepairPlan plan, RepairExecutionResult executionResult, ReviewDecision reviewDecision) {
         boolean passed = reviewDecision.status() == ReviewStatus.PASS;
@@ -33,6 +34,7 @@ public class RepairReflectionAgent {
                         "Keep repair writes limited to the affected service module."));
     }
 
+    /** Keeps the stored evidence summary short enough for records and notifications. */
     private String summarizeEvidence(String evidence) {
         if (evidence == null || evidence.isBlank()) {
             return "No traceback was available; repair used failing tests and known target-service scenario.";

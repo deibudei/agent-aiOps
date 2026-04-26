@@ -9,6 +9,16 @@ server.pid
 *.iml
 .vscode/
 .DS_Store
-
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+local-secrets/
+agent-platform/src/main/resources/application-local.yml
+target-service/src/main/resources/application-local.yml
 target-service/logs/
 agent-platform/logs/
+
+# Local-only progress reports and private notes
+local-reports/

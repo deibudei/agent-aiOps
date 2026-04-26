@@ -14,13 +14,42 @@ public class RepairReviewerAgent {
     private final GitTools gitTools;
     private final ReviewPolicy reviewPolicy;
 
+    /** Wires git diff inspection and the configured review policy. */
     public RepairReviewerAgent(GitTools gitTools, ReviewPolicy reviewPolicy) {
         this.gitTools = gitTools;
         this.reviewPolicy = reviewPolicy;
     }
 
+    /** Blocks unsafe or unverified patches before commit, PR, or notification. */
     public ReviewDecision review(RepairExecutionResult executionResult) {
         List<String> changedFiles = gitTools.changedTargetFiles();
+        if (executionResult.patchResult() == null || !executionResult.patchResult().success()) {
+            return new ReviewDecision(
+                    ReviewStatus.REJECT,
+                    "Patch application failed or produced no valid result.",
+                    "Do not commit when the Agent failed to apply a safe patch.",
+                    changedFiles);
+        }
+
+        if (executionResult.patchProposal() != null
+                && (executionResult.patchProposal().operations() == null
+                        || executionResult.patchProposal().operations().isEmpty())) {
+            return new ReviewDecision(
+                    ReviewStatus.REJECT,
+                    "LLM patch proposal did not contain any operation.",
+                    "The Agent must produce a concrete, reviewable patch before validation.",
+                    changedFiles);
+        }
+
+        if (executionResult.patchApplicationResult() != null
+                && !executionResult.patchApplicationResult().success()) {
+            return new ReviewDecision(
+                    ReviewStatus.REJECT,
+                    "LLM patch proposal failed tool-policy application.",
+                    "The repair must pass path and exact-text checks before tests can be trusted.",
+                    changedFiles);
+        }
+
         if (!executionResult.testResult().success()) {
             return new ReviewDecision(
                     ReviewStatus.REVISE,

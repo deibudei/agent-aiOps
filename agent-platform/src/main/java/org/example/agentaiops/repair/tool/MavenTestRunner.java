@@ -15,6 +15,7 @@ public class MavenTestRunner implements TestRunner {
     private final ToolPolicy toolPolicy;
     private final CommandRunner commandRunner;
 
+    /** Wires Maven command execution with workspace-root detection. */
     public MavenTestRunner(
             RepairProperties properties, ToolPolicy toolPolicy, CommandRunner commandRunner) {
         this.properties = properties;
@@ -22,6 +23,7 @@ public class MavenTestRunner implements TestRunner {
         this.commandRunner = commandRunner;
     }
 
+    /** Runs the configured target-service Maven tests from the repository root. */
     @Override
     public TestExecutionResult runTests() {
         List<String> command = List.of(mavenCommand(), "-pl", "target-service", "test");
@@ -31,6 +33,7 @@ public class MavenTestRunner implements TestRunner {
                 result.exitCode(), result.output(), "", result.durationMillis(), result.timedOut());
     }
 
+    /** Chooses the Windows or Unix Maven launcher name. */
     private String mavenCommand() {
         String os = System.getProperty("os.name", "").toLowerCase();
         return os.contains("win") ? "mvn.cmd" : "mvn";

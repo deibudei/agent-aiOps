@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class RepairToolRegistry {
 
+    /** Lists tool names that are exposed to planner prompts and records. */
     public List<String> toolNames() {
         return List.of(
                 "ReadLogTools",

@@ -18,6 +18,7 @@ class OrderControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    /** Verifies the quote endpoint returns a calculated price. */
     @Test
     void returnsQuoteForValidInput() throws Exception {
         mockMvc.perform(get("/api/orders/quote")
@@ -27,6 +28,7 @@ class OrderControllerTest {
                 .andExpect(jsonPath("$.unitPriceCents").value(400));
     }
 
+    /** Verifies zero quantity maps to a client error. */
     @Test
     void returnsBadRequestForZeroQuantity() throws Exception {
         mockMvc.perform(get("/api/orders/quote")

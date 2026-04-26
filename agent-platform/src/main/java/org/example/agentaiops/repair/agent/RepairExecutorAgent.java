@@ -2,6 +2,11 @@ package org.example.agentaiops.repair.agent;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import org.example.agentaiops.llm.LangChainPatchPlanner;
+import org.example.agentaiops.repair.model.EvidenceBundle;
+import org.example.agentaiops.repair.model.PatchApplicationResult;
+import org.example.agentaiops.repair.model.PatchProposal;
 import org.example.agentaiops.repair.model.PatchResult;
 import org.example.agentaiops.repair.model.RepairExecutionResult;
 import org.example.agentaiops.repair.model.RepairPlan;
@@ -35,27 +40,53 @@ public class RepairExecutorAgent {
     private final ReadCodeTools readCodeTools;
     private final PatchTools patchTools;
     private final RunTestTools runTestTools;
+    private final LangChainPatchPlanner langChainPatchPlanner;
 
+    /** Wires source-reading, patching, testing, and optional LangChain4j patch planning. */
     public RepairExecutorAgent(
-            ReadCodeTools readCodeTools, PatchTools patchTools, RunTestTools runTestTools) {
+            ReadCodeTools readCodeTools,
+            PatchTools patchTools,
+            RunTestTools runTestTools,
+            LangChainPatchPlanner langChainPatchPlanner) {
         this.readCodeTools = readCodeTools;
         this.patchTools = patchTools;
         this.runTestTools = runTestTools;
+        this.langChainPatchPlanner = langChainPatchPlanner;
     }
 
+    /** Executes a plan without structured evidence, using the legacy fallback path. */
     public RepairExecutionResult execute(RepairPlan plan, int maxAttempts) {
+        return execute(plan, null, maxAttempts);
+    }
+
+    /** Applies an LLM patch proposal when available, then validates with Maven tests. */
+    public RepairExecutionResult execute(RepairPlan plan, EvidenceBundle evidenceBundle, int maxAttempts) {
         List<RepairStepResult> steps = new ArrayList<>();
+        PatchProposal patchProposal = null;
+        PatchApplicationResult patchApplicationResult = null;
+        PatchResult patchResult;
 
-        ToolExecutionResult code = readCodeTools.readFile(ORDER_SERVICE);
-        steps.add(new RepairStepResult("ReadCodeTools", ORDER_SERVICE, summarize(code), code.success()));
-
-        PatchResult patchResult = new PatchResult(false, ORDER_SERVICE, "Patch not attempted");
-        if (code.success() && code.output().contains("quantity must be greater than 0")) {
-            patchResult = new PatchResult(true, ORDER_SERVICE, "Validation already present");
-        } else if (code.success() && code.output().contains("return totalCents / quantity;")) {
-            patchResult = patchTools.replaceInFile(ORDER_SERVICE, BUGGY_METHOD, FIXED_METHOD);
+        if (langChainPatchPlanner.enabled() && evidenceBundle != null) {
+            Optional<PatchProposal> proposal = langChainPatchPlanner.propose(plan, evidenceBundle.sourceSnippets());
+            if (proposal.isPresent()) {
+                patchProposal = proposal.get();
+                steps.add(new RepairStepResult(
+                        "LangChainPatchPlanner",
+                        "PatchProposal",
+                        "operations=" + patchProposal.operations().size(),
+                        !patchProposal.operations().isEmpty()));
+                patchApplicationResult = patchTools.applyProposal(patchProposal);
+                patchResult = toPatchResult(patchApplicationResult);
+            } else {
+                patchResult = new PatchResult(false, "", "LLM patch proposal was empty or invalid JSON");
+                steps.add(new RepairStepResult(
+                        "LangChainPatchPlanner", "PatchProposal", patchResult.message(), false));
+            }
+        } else {
+            patchResult = executeFallbackPatch(steps);
         }
-        steps.add(new RepairStepResult("PatchTools", ORDER_SERVICE, patchResult.message(), patchResult.success()));
+
+        steps.add(new RepairStepResult("PatchTools", patchResult.filePath(), patchResult.message(), patchResult.success()));
 
         TestExecutionResult testResult = runTestTools.runTargetServiceTests();
         steps.add(new RepairStepResult(
@@ -75,9 +106,35 @@ public class RepairExecutorAgent {
                     testResult.success()));
         }
 
-        return new RepairExecutionResult(steps, testResult, patchResult);
+        return new RepairExecutionResult(
+                steps, testResult, patchResult, patchProposal, patchApplicationResult);
     }
 
+    /** Runs the original deterministic OrderService repair when LLM repair is disabled. */
+    private PatchResult executeFallbackPatch(List<RepairStepResult> steps) {
+        ToolExecutionResult code = readCodeTools.readFile(ORDER_SERVICE);
+        steps.add(new RepairStepResult("ReadCodeTools", ORDER_SERVICE, summarize(code), code.success()));
+
+        if (code.success() && code.output().contains("quantity must be greater than 0")) {
+            return new PatchResult(true, ORDER_SERVICE, "Validation already present");
+        }
+        if (code.success() && code.output().contains("return totalCents / quantity;")) {
+            return patchTools.replaceInFile(ORDER_SERVICE, BUGGY_METHOD, FIXED_METHOD);
+        }
+        return new PatchResult(false, ORDER_SERVICE, "Patch not attempted");
+    }
+
+    /** Collapses a multi-operation patch application into the legacy patch result shape. */
+    private PatchResult toPatchResult(PatchApplicationResult applicationResult) {
+        String files = applicationResult.patchResults().stream()
+                .map(PatchResult::filePath)
+                .distinct()
+                .reduce((left, right) -> left + "," + right)
+                .orElse("");
+        return new PatchResult(applicationResult.success(), files, applicationResult.message());
+    }
+
+    /** Produces short step output for the repair record and SSE events. */
     private String summarize(ToolExecutionResult result) {
         if (!result.success()) {
             return result.error();

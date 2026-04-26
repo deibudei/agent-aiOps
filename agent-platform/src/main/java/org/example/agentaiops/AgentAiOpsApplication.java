@@ -9,6 +9,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 @EnableConfigurationProperties(RepairProperties.class)
 public class AgentAiOpsApplication {
 
+    /** Starts the Agent platform Spring Boot application. */
     public static void main(String[] args) {
         SpringApplication.run(AgentAiOpsApplication.class, args);
     }

@@ -11,10 +11,12 @@ public class OrderController {
 
     private final OrderService orderService;
 
+    /** Injects the order pricing service. */
     public OrderController(OrderService orderService) {
         this.orderService = orderService;
     }
 
+    /** Returns a quote with the calculated unit price. */
     @GetMapping("/api/orders/quote")
     public OrderQuoteResponse quote(@RequestParam int totalCents, @RequestParam int quantity) {
         int unitPriceCents = orderService.calculateUnitPrice(totalCents, quantity);

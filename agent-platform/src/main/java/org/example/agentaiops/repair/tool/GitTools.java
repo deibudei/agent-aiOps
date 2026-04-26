@@ -16,17 +16,20 @@ public class GitTools {
     private final ToolPolicy toolPolicy;
     private final CommandRunner commandRunner;
 
+    /** Wires git config, path policy, and command execution. */
     public GitTools(RepairProperties properties, ToolPolicy toolPolicy, CommandRunner commandRunner) {
         this.properties = properties;
         this.toolPolicy = toolPolicy;
         this.commandRunner = commandRunner;
     }
 
+    /** Reads the target-service diff for review and repair records. */
     public String readTargetDiff() {
         CommandResult result = runGit("diff", "--", "target-service");
         return stripGitWarnings(result.output());
     }
 
+    /** Lists changed target-service files from the working tree diff. */
     public List<String> changedTargetFiles() {
         CommandResult result = runGit("diff", "--name-only", "--", "target-service");
         if (!result.success() || result.output().isBlank()) {
@@ -35,6 +38,7 @@ public class GitTools {
         return parseChangedFiles(result.output());
     }
 
+    /** Parses git output while ignoring environment warning lines. */
     static List<String> parseChangedFiles(String output) {
         return Arrays.stream(output.split("\\R"))
                 .map(String::trim)
@@ -43,6 +47,7 @@ public class GitTools {
                 .toList();
     }
 
+    /** Removes warning lines that should not appear in demo records. */
     private static String stripGitWarnings(String output) {
         return Arrays.stream(output.split("\\R"))
                 .filter(value -> !isGitWarning(value.trim()))
@@ -50,10 +55,12 @@ public class GitTools {
                 .orElse("");
     }
 
+    /** Detects git warnings emitted by the local Windows environment. */
     private static boolean isGitWarning(String value) {
         return value.startsWith("warning: ");
     }
 
+    /** Creates a repair branch, commits target-service changes, and pushes it when enabled. */
     public GitCommitResult commitAndPush(String sessionId) {
         if (!properties.getGit().isEnabled()) {
             return new GitCommitResult(true, "", "", "Git is disabled; skipped commit and push");
@@ -90,10 +97,12 @@ public class GitTools {
         return new GitCommitResult(true, branchName, commitMessage, "Branch pushed");
     }
 
+    /** Confirms every changed file stays inside the write whitelist. */
     public boolean allChangedFilesAllowed(List<String> changedFiles) {
         return changedFiles.stream().allMatch(toolPolicy::isAllowedChangedFile);
     }
 
+    /** Runs a git command from the repository root. */
     private CommandResult runGit(String... args) {
         List<String> command = new ArrayList<>();
         command.add("git");
@@ -104,6 +113,7 @@ public class GitTools {
                 Duration.ofSeconds(properties.getWorkflow().getProcessTimeoutSeconds()));
     }
 
+    /** Converts a session id into a safe branch suffix. */
     private String sanitize(String sessionId) {
         return sessionId.replaceAll("[^A-Za-z0-9._-]", "-");
     }

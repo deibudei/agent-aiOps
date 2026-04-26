@@ -25,6 +25,8 @@
         <java.version>17</java.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
+        <langchain4j.version>1.13.0</langchain4j.version>
+        <langchain4j.community.version>1.13.0-beta23</langchain4j.community.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 </project>

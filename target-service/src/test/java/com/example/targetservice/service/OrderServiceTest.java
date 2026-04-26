@@ -9,11 +9,13 @@ class OrderServiceTest {
 
     private final OrderService orderService = new OrderService();
 
+    /** Verifies normal unit-price calculation. */
     @Test
     void calculatesUnitPrice() {
         assertThat(orderService.calculateUnitPrice(1200, 3)).isEqualTo(400);
     }
 
+    /** Verifies invalid quantities are rejected before division. */
     @Test
     void rejectsZeroQuantity() {
         assertThatThrownBy(() -> orderService.calculateUnitPrice(1200, 0))

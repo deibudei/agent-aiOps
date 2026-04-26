@@ -22,11 +22,13 @@ public class FeishuTools {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
+    /** Wires Feishu configuration and JSON serialization. */
     public FeishuTools(RepairProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
         this.objectMapper = objectMapper;
     }
 
+    /** Sends a repair review card to Feishu when notification is enabled. */
     public NotificationResult sendRepairCard(
             String sessionId, PullRequestResult pullRequestResult, String rootCause, String fixStrategy) {
         if (!properties.getFeishu().isEnabled()) {
@@ -56,6 +58,7 @@ public class FeishuTools {
         }
     }
 
+    /** Builds the interactive Feishu card payload. */
     private String buildPayload(
             String sessionId, PullRequestResult pullRequestResult, String rootCause, String fixStrategy)
             throws JsonProcessingException {

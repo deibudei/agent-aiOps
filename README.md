@@ -12,7 +12,7 @@ Java implementation of a service auto-repair Agent demo.
 ## Demo Flow
 
 1. Start the target service.
-2. Trigger the validation bug so the service writes a Java traceback.
+2. Trigger the validation bug so the service writes a standalone Java traceback under `target-service/logs/tracebacks`.
 3. Start the Agent platform.
 4. Call `POST /api/repair/run`.
 5. Watch repair events from `GET /api/repair/stream/{sessionId}`.
@@ -25,22 +25,34 @@ detect -> plan -> execute -> patch -> test -> review -> commit -> PR -> Feishu -
 
 GitHub PR and Feishu delivery are implemented but disabled by default. Enable them with environment variables when recording the competition demo.
 
+The target service keeps the normal application log at `target-service/logs/target-service.log`. Unexpected runtime failures are also written as separate files under `target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log`, and the Agent reads the `target-service/logs` directory to pick the latest traceback.
+
 ## Current Agent Maturity
 
-The backend loop is wired, but the current planner/executor is still scenario-specific for the `OrderService` validation bug. The next phase is to replace that hard-coded path with an LLM + tool-registry repair loop that derives the root cause, proposes a structured patch, applies it through `ToolPolicy`, runs tests, reviews the diff, and then creates the PR/notification/record.
+The backend loop is wired and LangChain4j has been introduced for OpenAI repair planning and patch proposal generation. DashScope/Qwen remains available as an optional provider. The deterministic `OrderService` fallback remains while the real LLM-driven repair path is stabilized. The current mainline target service is already in the repaired state; a repeatable bug state still needs a `demo-bug` branch or documented reset step.
 
 ## Next Implementation Plan
 
 Build the real Agent as a vertical MVP before adding frontend or new triggers:
 
 1. Define structured contracts: `EvidenceBundle`, `RepairAnalysis`, `RepairPlan`, and `PatchProposal`.
-2. Add a DashScope/Qwen `LlmClient` with timeout, retry, disabled-mode behavior, and strict JSON parsing.
+2. Use LangChain4j OpenAI integration with disabled-mode behavior and strict JSON parsing.
 3. Collect traceback, failing tests, candidate files, and source snippets into the evidence bundle.
-4. Replace hard-coded planner logic with LLM-generated root cause, suspected files, steps, and test strategy.
-5. Replace hard-coded executor string replacement with LLM-generated patch proposals applied only through `PatchTools` and `ToolPolicy`.
-6. Enforce hard review gates: invalid JSON, empty diff, out-of-whitelist paths, and failing tests must block commit/PR/notification.
-7. Extend repair records with model input summary, model output, patch proposal, retry history, final diff, and reflection.
+4. Replace hard-coded planner logic with OpenAI-generated root cause, suspected files, steps, and test strategy.
+5. Replace hard-coded executor string replacement with OpenAI-generated patch proposals applied only through `PatchTools` and `ToolPolicy`.
+6. Enforce hard review gates: invalid JSON, empty diff, out-of-whitelist paths, and failing tests must block commit/PR/notification. Started.
+7. Extend repair records with model input summary, model output, patch proposal, retry history, final diff, and reflection. Started.
 8. Keep a repeatable demo reset path, preferably a `demo-bug` branch.
+
+## LangChain4j
+
+LangChain4j is used for the LLM planning/proposal layer, not for direct file writes:
+
+- `RepairChatModelProvider`: lazily builds the configured OpenAI or DashScope `ChatModel`.
+- `LangChainRepairPlanner`: requests strict JSON `RepairPlan`.
+- `LangChainPatchPlanner`: requests strict JSON `PatchProposal`.
+- `StructuredJsonParser`: extracts and rejects invalid model JSON.
+- `PatchTools` and `ToolPolicy`: remain the only controlled file-write path.
 
 ## Context Maintenance
 
@@ -66,6 +78,13 @@ Trigger the demo bug:
 Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
 ```
 
+Useful log settings:
+
+```text
+REPAIR_TARGET_LOG=target-service/logs
+TARGET_SERVICE_TRACEBACK_LOG_DIR=logs/tracebacks
+```
+
 Run the repair:
 
 ```powershell
@@ -73,7 +92,7 @@ $body = @{ sessionId = "demo-001" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/repair/run" -ContentType "application/json" -Body $body
 ```
 
-The target service test is intentionally red before the repair. After the repair patches `OrderService`, this should pass:
+The current mainline target service is already repaired, so this should pass. Use the future `demo-bug` branch or reset step to reproduce the pre-repair failure:
 
 ```powershell
 mvn -pl target-service test
@@ -82,9 +101,51 @@ mvn -pl target-service test
 ## Environment
 
 ```text
-DASHSCOPE_API_KEY=
+REPAIR_LLM_ENABLED=false
+REPAIR_LLM_PROVIDER=openai
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
 REPAIR_GIT_ENABLED=false
 REPAIR_GITHUB_ENABLED=false
 FEISHU_ENABLED=false
 FEISHU_WEBHOOK_URL=
 ```
+
+## Local Profile
+
+Commit-safe config stays in:
+
+```text
+agent-platform/src/main/resources/application.yml
+```
+
+Local secrets go in the gitignored file:
+
+```text
+agent-platform/src/main/resources/application-local.yml
+```
+
+Run with:
+
+```powershell
+mvn -pl agent-platform spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+## Demo Fault Injection
+
+The Agent platform can inject local demo faults into fixed target-service source files:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:9901/api/demo/faults"
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
+```
+
+Supported fault types:
+
+- `quantity-division-by-zero`
+- `wrong-quote-route`
+- `wrong-error-status`
+
+Keep real API keys in environment variables only. `.env`, `.env.*`, `*.secret`, `local-secrets/`, and `local-reports/` are ignored.

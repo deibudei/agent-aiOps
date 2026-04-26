@@ -11,13 +11,19 @@ spring:
 dashscope:
   api-key: ${DASHSCOPE_API_KEY:}
   model: ${DASHSCOPE_MODEL:qwen-max}
+  base-url: ${DASHSCOPE_BASE_URL:}
+
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  model: ${OPENAI_MODEL:gpt-4o-mini}
+  base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
 
 repair:
   workspace-root: ${REPAIR_WORKSPACE_ROOT:${user.dir}}
   target-project:
     name: target-service
     root-path: ${REPAIR_TARGET_ROOT:target-service}
-    log-path: ${REPAIR_TARGET_LOG:target-service/logs/target-service.log}
+    log-path: ${REPAIR_TARGET_LOG:target-service/logs}
     test-command: ${REPAIR_TEST_COMMAND:mvn -pl target-service test}
   workflow:
     max-repair-attempts: ${REPAIR_MAX_ATTEMPTS:3}
@@ -33,3 +39,6 @@ repair:
     webhook-url: ${FEISHU_WEBHOOK_URL:}
   llm:
     enabled: ${REPAIR_LLM_ENABLED:false}
+    provider: ${REPAIR_LLM_PROVIDER:openai}
+    temperature: ${REPAIR_LLM_TEMPERATURE:0.1}
+    max-tokens: ${REPAIR_LLM_MAX_TOKENS:2048}

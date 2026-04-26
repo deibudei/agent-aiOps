@@ -11,3 +11,6 @@ logging:
   level:
     root: INFO
     com.example.targetservice: DEBUG
+
+target-service:
+  traceback-log-dir: ${TARGET_SERVICE_TRACEBACK_LOG_DIR:logs/tracebacks}

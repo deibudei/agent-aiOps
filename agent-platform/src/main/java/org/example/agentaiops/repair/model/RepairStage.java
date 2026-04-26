@@ -20,6 +20,7 @@ public enum RepairStage {
         this.wireName = wireName;
     }
 
+    /** Returns the stable stage name exposed through SSE. */
     public String wireName() {
         return wireName;
     }

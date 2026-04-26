@@ -17,6 +17,7 @@ public class ToolPolicy {
     private final Path targetTestRoot;
     private final Path targetLogsRoot;
 
+    /** Computes all read/write boundaries from repair configuration. */
     public ToolPolicy(RepairProperties properties) {
         this.workspaceRoot = discoverWorkspaceRoot(properties.getWorkspaceRoot());
         this.targetRoot = resolveTargetRoot(properties.getTargetProject().getRootPath());
@@ -26,35 +27,42 @@ public class ToolPolicy {
         this.targetLogsRoot = targetRoot.resolve("logs").normalize();
     }
 
+    /** Returns the detected repository root. */
     public Path workspaceRoot() {
         return workspaceRoot;
     }
 
+    /** Returns the target service module root. */
     public Path targetRoot() {
         return targetRoot;
     }
 
+    /** Returns the target service log directory. */
     public Path targetLogsRoot() {
         return targetLogsRoot;
     }
 
+    /** Resolves a path for safe reads from source, logs, or target pom.xml. */
     public Path resolveForRead(String path) {
         Path resolved = resolveTargetAware(path);
         ensureUnderAny(resolved, List.of(targetSourceRoot, targetLogsRoot, targetRoot.resolve("pom.xml")));
         return resolved;
     }
 
+    /** Resolves a path for safe writes under target-service src/main or src/test. */
     public Path resolveForWrite(String path) {
         Path resolved = resolveTargetAware(path);
         ensureUnderAny(resolved, List.of(targetMainRoot, targetTestRoot));
         return resolved;
     }
 
+    /** Checks whether a changed file is allowed to appear in a repair diff. */
     public boolean isAllowedChangedFile(String fileName) {
         Path resolved = resolveTargetAware(fileName);
         return startsWith(resolved, targetMainRoot) || startsWith(resolved, targetTestRoot);
     }
 
+    /** Converts an absolute path to a repo-relative display path when possible. */
     public String display(Path path) {
         Path normalized = path.toAbsolutePath().normalize();
         if (startsWith(normalized, workspaceRoot)) {
@@ -63,6 +71,7 @@ public class ToolPolicy {
         return normalized.toString();
     }
 
+    /** Resolves the configured target root, including sibling fallback for module launches. */
     private Path resolveTargetRoot(String configuredRoot) {
         Path direct = resolveWorkspacePath(configuredRoot);
         if (direct.toFile().exists()) {
@@ -75,6 +84,7 @@ public class ToolPolicy {
         return direct;
     }
 
+    /** Resolves relative paths from either repo root or target module root. */
     private Path resolveTargetAware(String path) {
         Path raw = Paths.get(path);
         if (raw.isAbsolute()) {
@@ -97,6 +107,7 @@ public class ToolPolicy {
         return targetRoot.resolve(path).toAbsolutePath().normalize();
     }
 
+    /** Detects the repo root even when agent-platform is launched from its module directory. */
     private Path discoverWorkspaceRoot(String configuredRoot) {
         Path configured = Paths.get(configuredRoot).toAbsolutePath().normalize();
         if (isWorkspaceRoot(configured)) {
@@ -111,12 +122,14 @@ public class ToolPolicy {
         return configured;
     }
 
+    /** Checks for the expected multi-module Maven project layout. */
     private boolean isWorkspaceRoot(Path path) {
         return Files.exists(path.resolve("pom.xml"))
                 && Files.exists(path.resolve("agent-platform/pom.xml"))
                 && Files.exists(path.resolve("target-service/pom.xml"));
     }
 
+    /** Resolves a path relative to the repository root unless it is already absolute. */
     private Path resolveWorkspacePath(String path) {
         Path raw = Paths.get(path);
         if (raw.isAbsolute()) {
@@ -125,6 +138,7 @@ public class ToolPolicy {
         return workspaceRoot.resolve(raw).toAbsolutePath().normalize();
     }
 
+    /** Throws when a resolved path falls outside every allowed root. */
     private void ensureUnderAny(Path path, List<Path> allowedRoots) {
         Path normalized = path.toAbsolutePath().normalize();
         for (Path allowedRoot : allowedRoots) {
@@ -135,6 +149,7 @@ public class ToolPolicy {
         throw new IllegalArgumentException("Path is outside repair whitelist: " + normalized);
     }
 
+    /** Normalizes both sides before testing path containment. */
     private boolean startsWith(Path path, Path root) {
         return path.toAbsolutePath().normalize().startsWith(root.toAbsolutePath().normalize());
     }

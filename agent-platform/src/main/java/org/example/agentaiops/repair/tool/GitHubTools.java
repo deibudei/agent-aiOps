@@ -16,12 +16,14 @@ public class GitHubTools implements PullRequestProvider {
     private final ToolPolicy toolPolicy;
     private final CommandRunner commandRunner;
 
+    /** Wires GitHub flags, repository policy, and command execution. */
     public GitHubTools(RepairProperties properties, ToolPolicy toolPolicy, CommandRunner commandRunner) {
         this.properties = properties;
         this.toolPolicy = toolPolicy;
         this.commandRunner = commandRunner;
     }
 
+    /** Creates a GitHub PR via gh CLI when GitHub integration is enabled. */
     @Override
     public PullRequestResult createPullRequest(String branchName, String title, String body) {
         if (!properties.getGithub().isEnabled()) {

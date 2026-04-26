@@ -30,8 +30,9 @@
 当前代码已经打通后端闭环，但还不是完全通用的自主修复 Agent：
 
 - 已实现：异常读取、计划阶段、代码读取、代码修改、测试执行、diff review、GitHub PR 工具、飞书通知工具、修复记录和反思沉淀。
-- 当前限制：`RepairPlannerAgent` 和 `RepairExecutorAgent` 仍以 `OrderService` 参数校验场景为中心，修复目标和补丁模板比较固定。
-- 下一阶段目标：把规划和执行升级为 LLM + 工具注册表驱动，让 Agent 根据 traceback、测试输出和源码上下文生成结构化修复计划和补丁。
+- 当前进展：已引入 LangChain4j，并切到 OpenAI 接口作为默认规划和补丁 proposal 层；DashScope/Qwen 保留为可选 provider。
+- 当前限制：`RepairPlannerAgent` 和 `RepairExecutorAgent` 仍保留 `OrderService` 参数校验 fallback，真实 LLM 闭环仍在稳定中；当前主线代码已是修复后状态，复现故障需要后续准备 `demo-bug` 分支或 reset 步骤。
+- 下一阶段目标：让 Agent 默认根据 traceback、测试输出和源码上下文生成结构化修复计划和补丁 proposal，再由受控 Java 工具执行落盘、测试和审查。
 
 ## 真实 Agent 修复实施计划
 
@@ -41,21 +42,50 @@ MVP 验收标准：
 
 - `RepairPlannerAgent` 不再写死 `OrderService`。
 - `RepairExecutorAgent` 不再写死固定 buggy/fixed 方法字符串。
-- Agent 能根据 traceback、测试输出和源码上下文生成结构化修复计划。
+- Agent 能通过 LangChain4j + OpenAI 根据 traceback、测试输出和源码上下文生成结构化修复计划。
 - Agent 能生成结构化补丁 proposal，并且只能通过 `ToolPolicy` 白名单写入。
 - 测试失败、diff 为空、路径越界、模型 JSON 无法解析时，都不能进入 commit/PR/飞书阶段。
 - 修复记录能保存模型输入摘要、模型输出、补丁 proposal、测试结果、diff 和反思。
 
 建议实施顺序：
 
-1. 定义 Agent 数据契约：`EvidenceBundle`、`RepairAnalysis`、`RepairPlan`、`PatchProposal`，并要求 LLM 输出严格 JSON。
-2. 新增 `LlmClient`，接入 DashScope/Qwen HTTP API，支持超时、重试、关闭开关和 JSON 解析失败处理。
-3. 新增证据收集层，把 traceback、baseline 测试输出、候选源码文件和关键片段整理成 `EvidenceBundle`。
-4. 改造 `RepairPlannerAgent`，用 LLM 产出根因分析、怀疑文件、修复步骤和测试策略。
-5. 改造 `RepairExecutorAgent`，用 LLM 产出 `PatchProposal`，再由 `PatchTools` 做安全落盘。
-6. 强化 `RepairReviewerAgent`，把模型输出合法性、路径白名单、diff、测试结果都变成硬门禁。
-7. 扩展 `RepairRecord`，记录模型交互、重试历史、补丁 proposal 和最终反思。
+1. 定义 Agent 数据契约：`EvidenceBundle`、`RepairAnalysis`、`RepairPlan`、`PatchProposal`，并要求 LLM 输出严格 JSON。（已开始）
+2. 引入 LangChain4j OpenAI 集成，支持关闭开关、模型参数和 JSON 解析失败处理。（已开始）
+3. 新增证据收集层，把 traceback、baseline 测试输出、候选源码文件和关键片段整理成 `EvidenceBundle`。（已开始）
+4. 改造 `RepairPlannerAgent`，用 LangChain4j + OpenAI 产出根因分析、怀疑文件、修复步骤和测试策略。（已开始，保留 fallback）
+5. 改造 `RepairExecutorAgent`，用 LangChain4j + OpenAI 产出 `PatchProposal`，再由 `PatchTools` 做安全落盘。（已开始，保留 fallback）
+6. 强化 `RepairReviewerAgent`，把模型输出合法性、路径白名单、diff、测试结果都变成硬门禁。（已开始）
+7. 扩展 `RepairRecord`，记录模型交互、重试历史、补丁 proposal 和最终反思。（已开始）
 8. 准备可重复演示方式，优先使用 `demo-bug` 分支或明确的手动 reset 步骤恢复故障态。
+
+## LangChain4j 集成说明
+
+当前采用：
+
+```text
+LangChain4j + OpenAI：负责分析、规划、补丁 proposal
+自研 ToolPolicy/PatchTools/RunTestTools：负责安全校验、落盘和测试
+```
+
+关键类：
+
+- `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`。
+- `LangChainRepairPlanner`：生成严格 JSON 格式的 `RepairPlan`。
+- `LangChainPatchPlanner`：生成严格 JSON 格式的 `PatchProposal`。
+- `StructuredJsonParser`：抽取和解析模型 JSON，解析失败则拒绝结果。
+- `PatchTools`：唯一允许写入文件的工具，模型不能直接写文件。
+
+启用 OpenAI LLM：
+
+```powershell
+$env:REPAIR_LLM_ENABLED="true"
+$env:REPAIR_LLM_PROVIDER="openai"
+$env:OPENAI_API_KEY="你的 OpenAI API Key"
+$env:OPENAI_MODEL="gpt-4o-mini"
+$env:OPENAI_BASE_URL="https://api.openai.com/v1"
+```
+
+默认 `REPAIR_LLM_ENABLED=false`，系统继续走稳定 fallback，便于比赛演示和本地调试。
 
 暂缓内容：
 
@@ -128,17 +158,20 @@ mvn -pl agent-platform spring-boot:run
 cd D:\java_web_project\agent-aiOps
 ```
 
-调用下面的接口会触发 `quantity=0` 参数校验缺失问题，当前版本会产生 `/ by zero` 异常：
+调用下面的接口用于复现 `quantity=0` 参数校验缺失问题。注意：当前主线代码已经加入校验，因此会返回 400；只有切到后续准备的 `demo-bug` 分支或手动恢复故障代码时，才会产生 `/ by zero` 异常：
 
 ```powershell
 Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
 ```
 
-异常日志会写入：
+目标服务保留普通应用日志，同时把每次未预期 500 异常写成单独 traceback 文件，避免所有报错堆在一个文件里：
 
 ```text
 target-service/logs/target-service.log
+target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log
 ```
+
+`agent-platform` 默认读取整个 `target-service/logs` 目录，并从其中选择最新的异常 traceback 作为修复证据。
 
 ## 触发自动修复
 
@@ -148,7 +181,7 @@ target-service/logs/target-service.log
 
 - 终端 1：`target-service` 正在运行。
 - 终端 2：`agent-platform` 正在运行。
-- 已经调用过上面的 Bug 触发接口，或 `target-service/logs/target-service.log` 中已经有异常日志。
+- 已经调用过上面的 Bug 触发接口，或 `target-service/logs` 下已经有异常 traceback 文件。
 
 ```powershell
 $body = @{ sessionId = "demo-001" } | ConvertTo-Json
@@ -178,11 +211,64 @@ completed
 error
 ```
 
+## 演示故障注入
+
+`agent-platform` 提供本地演示故障 API，用于把当前已修复的 `target-service` 自动切到故障态。该能力只写入 `target-service/src/main` 下固定演示文件，方便后续选择不同故障类型再让 Agent 修复。
+
+列出可用故障：
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:9901/api/demo/faults"
+```
+
+当前支持：
+
+- `quantity-division-by-zero`：移除 `OrderService` 的 quantity 校验，`quantity=0` 会触发 `/ by zero`。
+- `wrong-quote-route`：把 `/api/orders/quote` 改成错误路由，Controller 测试会 404。
+- `wrong-error-status`：把参数校验异常错误映射成 500，Controller 测试会失败。
+
+注入一个故障：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
+```
+
+验证故障：
+
+```powershell
+mvn -pl target-service test
+```
+
+如果要通过 HTTP 触发运行时异常，需要重启 `target-service` 后再请求：
+
+```powershell
+Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
+```
+
+恢复修复态：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
+```
+
 ## 环境变量
 
 ```text
+REPAIR_LLM_ENABLED=false
+REPAIR_LLM_PROVIDER=openai
+REPAIR_LLM_TEMPERATURE=0.1
+REPAIR_LLM_MAX_TOKENS=2048
+
+REPAIR_TARGET_LOG=target-service/logs
+TARGET_SERVICE_TRACEBACK_LOG_DIR=logs/tracebacks
+
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+
 DASHSCOPE_API_KEY=
 DASHSCOPE_MODEL=qwen-max
+DASHSCOPE_BASE_URL=
 
 REPAIR_GIT_ENABLED=false
 REPAIR_GITHUB_ENABLED=false
@@ -192,6 +278,43 @@ REPAIR_BASE_BRANCH=main
 FEISHU_ENABLED=false
 FEISHU_WEBHOOK_URL=
 ```
+
+## 本地配置文件
+
+上传到 GitHub 的配置使用：
+
+```text
+agent-platform/src/main/resources/application.yml
+```
+
+本地真实运行使用：
+
+```text
+agent-platform/src/main/resources/application-local.yml
+```
+
+`application-local.yml` 已加入 `.gitignore`，可以在里面填写真实 key，不要上传。启动本地 profile：
+
+```powershell
+cd D:\java_web_project\agent-aiOps
+mvn -pl agent-platform spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+如果使用 OpenAI 兼容的 DashScope/Qwen 接口，`application-local.yml` 中保持：
+
+```yaml
+openai:
+  api-key: "你的 key"
+  model: qwen3.6-plus
+  base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+隐私注意：
+
+- 不要把真实 `OPENAI_API_KEY`、`DASHSCOPE_API_KEY`、`FEISHU_WEBHOOK_URL` 写入 README 或提交到 Git。
+- 建议只在 PowerShell 环境变量里配置 key。
+- `.gitignore` 已忽略 `.env`、`.env.*`、`*.secret`、`local-secrets/`、`local-reports/`。
+- `agent-platform/src/main/resources/application.yml` 当前只保留环境变量占位，不应写入真实 key。
 
 说明：
 
@@ -214,7 +337,7 @@ mvn -pl agent-platform test
 mvn -pl target-service test
 ```
 
-注意：`target-service` 的测试在修复前会失败，这是刻意设计的演示 bug。Agent 修复 `OrderService` 后，该测试应通过。
+注意：当前主线 `target-service` 已处于修复后状态，测试应通过。演示故障态需要使用后续准备的 `demo-bug` 分支或手动 reset 步骤。
 
 如果只想确认 `target-service` 能编译打包，可以跳过测试：
 
@@ -247,8 +370,10 @@ mvn -pl agent-platform spring-boot:run
 记录内容包括：
 
 - 异常摘要
+- 证据摘要
 - 修复计划
 - 工具执行步骤
+- LLM 补丁 proposal 和落盘结果
 - diff 摘要
 - 测试结果
 - Review 结论

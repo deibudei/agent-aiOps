@@ -14,10 +14,12 @@ public class ReadCodeTools {
 
     private final ToolPolicy toolPolicy;
 
+    /** Uses ToolPolicy so reads stay inside the allowed target-service paths. */
     public ReadCodeTools(ToolPolicy toolPolicy) {
         this.toolPolicy = toolPolicy;
     }
 
+    /** Reads one whitelisted source or log file. */
     public ToolExecutionResult readFile(String path) {
         try {
             Path resolved = toolPolicy.resolveForRead(path);
@@ -27,6 +29,7 @@ public class ReadCodeTools {
         }
     }
 
+    /** Searches Java source files for a literal query string. */
     public ToolExecutionResult searchCode(String query) {
         List<String> matches = new ArrayList<>();
         Path sourceRoot = toolPolicy.targetRoot().resolve("src");
@@ -39,6 +42,7 @@ public class ReadCodeTools {
         }
     }
 
+    /** Adds one matching file path to the search result list. */
     private void collectMatch(String query, List<String> matches, Path path) {
         try {
             String content = Files.readString(path);

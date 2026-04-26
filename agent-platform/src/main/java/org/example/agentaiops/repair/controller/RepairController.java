@@ -20,17 +20,20 @@ public class RepairController {
     private final RepairWorkflowService repairWorkflowService;
     private final RepairEventHub repairEventHub;
 
+    /** Wires the repair workflow API and event stream API. */
     public RepairController(RepairWorkflowService repairWorkflowService, RepairEventHub repairEventHub) {
         this.repairWorkflowService = repairWorkflowService;
         this.repairEventHub = repairEventHub;
     }
 
+    /** Starts a repair run and returns the SSE stream URL. */
     @PostMapping("/run")
     public RepairRunResponse run(@RequestBody(required = false) RepairRunRequest request) {
         String sessionId = request == null ? null : request.getSessionId();
         return repairWorkflowService.startAsync(sessionId);
     }
 
+    /** Streams repair events for a session using server-sent events. */
     @GetMapping(value = "/stream/{sessionId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable String sessionId) {
         return repairEventHub.subscribe(sessionId);

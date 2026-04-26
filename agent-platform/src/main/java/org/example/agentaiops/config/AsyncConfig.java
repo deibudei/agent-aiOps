@@ -8,6 +8,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @Configuration
 public class AsyncConfig {
 
+    /** Provides a bounded executor for asynchronous repair workflow runs. */
     @Bean(name = "repairTaskExecutor")
     public Executor repairTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
