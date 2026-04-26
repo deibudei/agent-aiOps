@@ -45,6 +45,32 @@ class ReadLogToolsTest {
     }
 
     @Test
+    void keepsStandaloneTracebackHeaderBeforeFrameworkFrames() throws Exception {
+        ReadLogTools tools = toolsFor("""
+                timestamp=2026-04-26T14:20:21.873445800Z
+                traceId=7ad8d4f9
+                method=GET
+                path=/api/orders/quote
+                query=totalCents=100&quantity=0
+                exception=java.lang.ArithmeticException: / by zero
+
+                java.lang.ArithmeticException: / by zero
+                \tat com.example.targetservice.service.OrderService.calculateUnitPrice(OrderService.java:10)
+                \tat com.example.targetservice.controller.OrderController.quote(OrderController.java:22)
+                \tat java.base/java.lang.reflect.Method.invoke(Method.java:568)
+                \tat org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:728)
+                """);
+
+        ToolExecutionResult result = tools.readLatestTraceback(2000);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output()).contains("exception=java.lang.ArithmeticException: / by zero");
+        assertThat(result.output()).contains("OrderService.calculateUnitPrice");
+        assertThat(result.output().indexOf("exception=java.lang.ArithmeticException"))
+                .isLessThan(result.output().indexOf("at java.base/java.lang.reflect.Method.invoke"));
+    }
+
+    @Test
     void readsLatestTracebackFromLogDirectory() throws Exception {
         Path logsDir = tempDir.resolve("target-service/logs");
         Path tracebacksDir = logsDir.resolve("tracebacks");

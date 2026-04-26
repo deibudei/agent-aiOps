@@ -29,7 +29,7 @@ The target service keeps the normal application log at `target-service/logs/targ
 
 ## Current Agent Maturity
 
-The backend loop is wired and LangChain4j has been introduced for OpenAI repair planning and patch proposal generation. DashScope/Qwen remains available as an optional provider. The deterministic `OrderService` fallback remains while the real LLM-driven repair path is stabilized. The current mainline target service is already in the repaired state; a repeatable bug state still needs a `demo-bug` branch or documented reset step.
+The backend loop is wired and now includes an optional LangChain4j Agentic Supervisor path. When `REPAIR_AGENTIC_ENABLED=true`, a Supervisor coordinates AI agents for diagnosis, planning, and patch proposal plus non-AI agents for evidence collection, patch application, tests, review, commit, PR, notification, reflection, and repair records. The old stable path remains as fallback.
 
 ## Next Implementation Plan
 
@@ -46,13 +46,15 @@ Build the real Agent as a vertical MVP before adding frontend or new triggers:
 
 ## LangChain4j
 
-LangChain4j is used for the LLM planning/proposal layer, not for direct file writes:
+LangChain4j is used for model reasoning and optional agentic orchestration, not for unrestricted file writes:
 
 - `RepairChatModelProvider`: lazily builds the configured OpenAI or DashScope `ChatModel`.
 - `LangChainRepairPlanner`: requests strict JSON `RepairPlan`.
 - `LangChainPatchPlanner`: requests strict JSON `PatchProposal`.
+- `AgenticRepairRunner`: builds the LangChain4j Agentic Supervisor when `REPAIR_AGENTIC_ENABLED=true`.
 - `StructuredJsonParser`: extracts and rejects invalid model JSON.
 - `PatchTools` and `ToolPolicy`: remain the only controlled file-write path.
+- Agentic AI agents only receive read-only `@Tool` methods; patching, Git, GitHub, and Feishu are non-AI agents guarded by existing policies and disabled-mode config.
 
 ## Context Maintenance
 
@@ -103,6 +105,10 @@ mvn -pl target-service test
 ```text
 REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
+REPAIR_LLM_TIMEOUT_SECONDS=90
+REPAIR_LLM_MAX_RETRIES=1
+REPAIR_AGENTIC_ENABLED=false
+REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS=24
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
@@ -111,6 +117,8 @@ REPAIR_GITHUB_ENABLED=false
 FEISHU_ENABLED=false
 FEISHU_WEBHOOK_URL=
 ```
+
+For OpenAI-compatible Qwen endpoints, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. The Agentic path trims traceback, source context, and SSE tool events before sending them through the supervisor.
 
 ## Local Profile
 
@@ -130,6 +138,17 @@ Run with:
 
 ```powershell
 mvn -pl agent-platform spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+To test the Agentic Supervisor locally, keep the key only in `application-local.yml` or environment variables and set:
+
+```yaml
+repair:
+  llm:
+    enabled: true
+    provider: openai
+  agentic:
+    enabled: true
 ```
 
 ## Demo Fault Injection

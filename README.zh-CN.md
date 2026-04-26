@@ -27,12 +27,12 @@
 
 ## 当前 Agent 成熟度
 
-当前代码已经打通后端闭环，但还不是完全通用的自主修复 Agent：
+当前代码已经打通后端闭环，并新增可选的 LangChain4j Agentic Supervisor 路径：
 
 - 已实现：异常读取、计划阶段、代码读取、代码修改、测试执行、diff review、GitHub PR 工具、飞书通知工具、修复记录和反思沉淀。
-- 当前进展：已引入 LangChain4j，并切到 OpenAI 接口作为默认规划和补丁 proposal 层；DashScope/Qwen 保留为可选 provider。
-- 当前限制：`RepairPlannerAgent` 和 `RepairExecutorAgent` 仍保留 `OrderService` 参数校验 fallback，真实 LLM 闭环仍在稳定中；当前主线代码已是修复后状态，复现故障需要后续准备 `demo-bug` 分支或 reset 步骤。
-- 下一阶段目标：让 Agent 默认根据 traceback、测试输出和源码上下文生成结构化修复计划和补丁 proposal，再由受控 Java 工具执行落盘、测试和审查。
+- 当前进展：已接入 `langchain4j-agentic`，可通过 `REPAIR_AGENTIC_ENABLED=true` 启用 Supervisor 自主编排；OpenAI-compatible/Qwen 是本地默认模型形态，DashScope provider 保留。
+- 当前模式：AI 子 Agent 负责诊断、计划和补丁 proposal；non-AI Agent 负责收集证据、应用补丁、跑测试、审查、commit、PR、飞书、反思和记录。
+- 当前限制：Agentic 路径默认关闭，并保留旧的稳定 fallback；写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
 
 ## 真实 Agent 修复实施计划
 
@@ -60,11 +60,14 @@ MVP 验收标准：
 
 ## LangChain4j 集成说明
 
-当前采用：
+当前支持两条路径：
 
 ```text
-LangChain4j + OpenAI：负责分析、规划、补丁 proposal
-自研 ToolPolicy/PatchTools/RunTestTools：负责安全校验、落盘和测试
+默认稳定路径：
+LangChain4j ChatModel + 严格 JSON planner/proposal + Java 工具执行
+
+可选 Agentic 路径：
+LangChain4j Agentic Supervisor + @Tool 只读工具 + non-AI Agent 安全执行
 ```
 
 关键类：
@@ -72,6 +75,7 @@ LangChain4j + OpenAI：负责分析、规划、补丁 proposal
 - `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`。
 - `LangChainRepairPlanner`：生成严格 JSON 格式的 `RepairPlan`。
 - `LangChainPatchPlanner`：生成严格 JSON 格式的 `PatchProposal`。
+- `AgenticRepairRunner`：启用 `REPAIR_AGENTIC_ENABLED=true` 时构建 Supervisor 和子 Agent。
 - `StructuredJsonParser`：抽取和解析模型 JSON，解析失败则拒绝结果。
 - `PatchTools`：唯一允许写入文件的工具，模型不能直接写文件。
 
@@ -83,7 +87,18 @@ $env:REPAIR_LLM_PROVIDER="openai"
 $env:OPENAI_API_KEY="你的 OpenAI API Key"
 $env:OPENAI_MODEL="gpt-4o-mini"
 $env:OPENAI_BASE_URL="https://api.openai.com/v1"
+$env:REPAIR_LLM_TIMEOUT_SECONDS="90"
+$env:REPAIR_LLM_MAX_RETRIES="1"
 ```
+
+启用 LangChain4j Agentic Supervisor：
+
+```powershell
+$env:REPAIR_AGENTIC_ENABLED="true"
+$env:REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS="24"
+```
+
+如果使用 OpenAI-compatible 的 Qwen 模型时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。Agentic 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。
 
 默认 `REPAIR_LLM_ENABLED=false`，系统继续走稳定 fallback，便于比赛演示和本地调试。
 
@@ -258,6 +273,8 @@ REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_TEMPERATURE=0.1
 REPAIR_LLM_MAX_TOKENS=2048
+REPAIR_AGENTIC_ENABLED=false
+REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS=24
 
 REPAIR_TARGET_LOG=target-service/logs
 TARGET_SERVICE_TRACEBACK_LOG_DIR=logs/tracebacks
@@ -307,6 +324,13 @@ openai:
   api-key: "你的 key"
   model: qwen3.6-plus
   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+repair:
+  llm:
+    enabled: true
+    provider: openai
+  agentic:
+    enabled: true
 ```
 
 隐私注意：

@@ -12,6 +12,7 @@ public class RepairProperties {
     private Github github = new Github();
     private Feishu feishu = new Feishu();
     private Llm llm = new Llm();
+    private Agentic agentic = new Agentic();
 
     /** Returns the repository root used by repair tools. */
     public String getWorkspaceRoot() {
@@ -81,6 +82,16 @@ public class RepairProperties {
     /** Updates LLM repair settings. */
     public void setLlm(Llm llm) {
         this.llm = llm;
+    }
+
+    /** Returns LangChain4j agentic workflow settings. */
+    public Agentic getAgentic() {
+        return agentic;
+    }
+
+    /** Updates LangChain4j agentic workflow settings. */
+    public void setAgentic(Agentic agentic) {
+        this.agentic = agentic;
     }
 
     public static class TargetProject {
@@ -235,6 +246,8 @@ public class RepairProperties {
         private String provider = "openai";
         private float temperature = 0.1f;
         private int maxTokens = 2048;
+        private int timeoutSeconds = 90;
+        private int maxRetries = 1;
 
         /** Returns whether LLM planning and patch proposal are enabled. */
         public boolean isEnabled() {
@@ -274,6 +287,51 @@ public class RepairProperties {
         /** Updates the maximum model response token count. */
         public void setMaxTokens(int maxTokens) {
             this.maxTokens = maxTokens;
+        }
+
+        /** Returns the per-request LLM timeout in seconds. */
+        public int getTimeoutSeconds() {
+            return timeoutSeconds;
+        }
+
+        /** Updates the per-request LLM timeout in seconds. */
+        public void setTimeoutSeconds(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
+        }
+
+        /** Returns how many provider retries LangChain4j should perform. */
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        /** Updates how many provider retries LangChain4j should perform. */
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+        }
+    }
+
+    public static class Agentic {
+        private boolean enabled;
+        private int maxSupervisorInvocations = 24;
+
+        /** Returns whether the LangChain4j agentic supervisor path is enabled. */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /** Updates whether the LangChain4j agentic supervisor path is enabled. */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /** Returns the maximum number of sub-agent calls the supervisor may make. */
+        public int getMaxSupervisorInvocations() {
+            return maxSupervisorInvocations;
+        }
+
+        /** Updates the maximum number of sub-agent calls the supervisor may make. */
+        public void setMaxSupervisorInvocations(int maxSupervisorInvocations) {
+            this.maxSupervisorInvocations = maxSupervisorInvocations;
         }
     }
 }

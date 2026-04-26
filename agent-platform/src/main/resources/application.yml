@@ -42,3 +42,8 @@ repair:
     provider: ${REPAIR_LLM_PROVIDER:openai}
     temperature: ${REPAIR_LLM_TEMPERATURE:0.1}
     max-tokens: ${REPAIR_LLM_MAX_TOKENS:2048}
+    timeout-seconds: ${REPAIR_LLM_TIMEOUT_SECONDS:90}
+    max-retries: ${REPAIR_LLM_MAX_RETRIES:1}
+  agentic:
+    enabled: ${REPAIR_AGENTIC_ENABLED:false}
+    max-supervisor-invocations: ${REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS:24}

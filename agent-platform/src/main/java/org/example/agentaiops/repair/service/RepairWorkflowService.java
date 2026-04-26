@@ -10,6 +10,7 @@ import org.example.agentaiops.repair.agent.RepairExecutorAgent;
 import org.example.agentaiops.repair.agent.RepairPlannerAgent;
 import org.example.agentaiops.repair.agent.RepairReflectionAgent;
 import org.example.agentaiops.repair.agent.RepairReviewerAgent;
+import org.example.agentaiops.repair.agentic.AgenticRepairRunner;
 import org.example.agentaiops.repair.model.EvidenceBundle;
 import org.example.agentaiops.repair.model.GitCommitResult;
 import org.example.agentaiops.repair.model.NotificationResult;
@@ -34,6 +35,7 @@ public class RepairWorkflowService {
 
     private final RepairProperties properties;
     private final RepairEventHub eventHub;
+    private final AgenticRepairRunner agenticRepairRunner;
     private final EvidenceAgent evidenceAgent;
     private final RepairPlannerAgent plannerAgent;
     private final RepairExecutorAgent executorAgent;
@@ -49,6 +51,7 @@ public class RepairWorkflowService {
     public RepairWorkflowService(
             RepairProperties properties,
             RepairEventHub eventHub,
+            AgenticRepairRunner agenticRepairRunner,
             EvidenceAgent evidenceAgent,
             RepairPlannerAgent plannerAgent,
             RepairExecutorAgent executorAgent,
@@ -61,6 +64,7 @@ public class RepairWorkflowService {
             @Qualifier("repairTaskExecutor") Executor repairTaskExecutor) {
         this.properties = properties;
         this.eventHub = eventHub;
+        this.agenticRepairRunner = agenticRepairRunner;
         this.evidenceAgent = evidenceAgent;
         this.plannerAgent = plannerAgent;
         this.executorAgent = executorAgent;
@@ -87,6 +91,19 @@ public class RepairWorkflowService {
     private void run(String sessionId) {
         Instant startedAt = Instant.now();
         try {
+            if (agenticRepairRunner.available()) {
+                eventHub.publish(sessionId, RepairStage.EXECUTING,
+                        "LangChain4j agentic supervisor is enabled");
+                try {
+                    agenticRepairRunner.run(sessionId, startedAt);
+                    return;
+                } catch (Exception agenticFailure) {
+                    eventHub.publish(sessionId, RepairStage.EXECUTING,
+                            "Agentic supervisor failed; falling back to legacy workflow: "
+                                    + describe(agenticFailure));
+                }
+            }
+
             eventHub.publish(sessionId, RepairStage.DETECTING, "Collecting traceback, tests, and source evidence");
             EvidenceBundle evidenceBundle = evidenceAgent.collect();
             String evidence = evidenceBundle.plannerInput();

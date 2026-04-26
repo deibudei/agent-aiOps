@@ -5,10 +5,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class OrderService {
 
-    /** Calculates unit price, validating quantity to prevent division by zero. */
+    /** Calculates unit price without guarding invalid quantities. */
     public int calculateUnitPrice(int totalCents, int quantity) {
         if (quantity <= 0) {
-            throw new IllegalArgumentException("quantity must be greater than zero");
+            throw new IllegalArgumentException("quantity must be positive");
         }
         return totalCents / quantity;
     }

@@ -40,7 +40,8 @@ Required demo loop:
 - Keep `README.zh-CN.md`, `README.md`, and this `AGENTS.md` updated whenever project architecture, commands, environment variables, demo flow, or Agent capability status changes.
 - Keep local cycle reports and private review notes under repo-root `local-reports/`; this directory is gitignored and must not be uploaded to GitHub.
 - Upload-safe config belongs in `agent-platform/src/main/resources/application.yml`; local secrets belong in gitignored `agent-platform/src/main/resources/application-local.yml`.
-- Current Agent maturity: the workflow is wired and LangChain4j has been introduced for OpenAI-based repair planning and patch proposal generation; DashScope/Qwen remains an optional provider. Execution still keeps a deterministic fallback while the real Agent loop is stabilized. Current mainline `target-service` is in the repaired state.
+- Current Agent maturity: the workflow is wired and includes an optional LangChain4j Agentic Supervisor path. `REPAIR_AGENTIC_ENABLED=true` makes a Supervisor coordinate AI agents for diagnosis/planning/patch proposal and non-AI agents for evidence, patch apply, tests, review, commit, PR, Feishu, reflection, and records. The legacy stable path remains as fallback. Current mainline `target-service` is in the repaired state.
+- Agentic prompt/SSE payloads are intentionally bounded: traceback, read-file results, source context, and tool event messages are trimmed before they are passed through the Supervisor. This keeps OpenAI-compatible/Qwen calls from timing out on oversized evidence.
 
 ## Local Skill Setup
 
@@ -53,11 +54,11 @@ Useful local skills for the next phase:
 
 ## Next Phase: Real Agent Repair
 
-Use LangChain4j for the LLM planning/proposal layer while keeping Java tools as the controlled execution layer:
+Use LangChain4j for the LLM planning/proposal layer and optional Agentic Supervisor orchestration while keeping Java tools as the controlled execution layer:
 
 - Read traceback/log evidence and failing tests.
-- Ask OpenAI through LangChain4j to produce a structured root-cause analysis and repair plan.
-- Let the Agent choose tools from a strict registry instead of hard-coding `OrderService`.
+- Ask OpenAI-compatible/Qwen or OpenAI through LangChain4j to produce structured root-cause analysis and repair plans.
+- Let the Agentic Supervisor choose sub-agents while only exposing read-only `@Tool` methods to AI agents.
 - Generate a structured patch proposal, validate paths through `ToolPolicy`, apply it, and run tests.
 - Review diff/test output with policy checks before GitHub PR and Feishu notification.
 - Persist repair records and reflection for future retrieval/RAG.
@@ -70,14 +71,18 @@ Implementation order:
 4. Replace `RepairExecutorAgent` hard-coded string replacement with patch proposal application through `PatchTools` and `ToolPolicy`. (started, fallback remains)
 5. Strengthen review gates: reject unparseable model output, empty diff, out-of-whitelist paths, failing tests, and changes outside `target-service/src/main` or `target-service/src/test`. (started)
 6. Update repair records to include model input summary, model output, patch proposal, retry history, final diff, and reflection. (started)
-7. Keep a deterministic demo reset path, preferably a `demo-bug` branch or documented manual reset, so the competition demo can be replayed.
+7. Add optional `langchain4j-agentic` Supervisor orchestration with AI and non-AI sub-agents. (started)
+8. Keep a deterministic demo reset path, preferably a `demo-bug` branch or documented manual reset, so the competition demo can be replayed.
 
 ## LangChain4j Integration Notes
 
-- Dependencies are in `agent-platform/pom.xml`: `dev.langchain4j:langchain4j`, `dev.langchain4j:langchain4j-open-ai`, and `dev.langchain4j:langchain4j-community-dashscope`.
+- Dependencies are in `agent-platform/pom.xml`: `dev.langchain4j:langchain4j`, `dev.langchain4j:langchain4j-open-ai`, `dev.langchain4j:langchain4j-community-dashscope`, and `dev.langchain4j:langchain4j-agentic`.
 - `RepairChatModelProvider` lazily builds the configured OpenAI or DashScope `ChatModel`.
+- OpenAI-compatible model calls use configurable `repair.llm.timeout-seconds` and `repair.llm.max-retries`; use `REPAIR_LLM_TIMEOUT_SECONDS` and `REPAIR_LLM_MAX_RETRIES` locally.
 - `LangChainRepairPlanner` asks the configured model for strict JSON `RepairPlan`.
 - `LangChainPatchPlanner` asks the configured model for strict JSON `PatchProposal`.
+- `AgenticRepairRunner` builds the LangChain4j Agentic Supervisor when `repair.agentic.enabled=true`.
+- Agentic AI agents get read-only `@Tool` methods for logs/code. Patch, Git, GitHub, Feishu, reflection, and records remain non-AI agents.
 - `StructuredJsonParser` strips optional markdown fences and rejects invalid JSON.
 - LangChain4j does not write files directly. `PatchTools` and `ToolPolicy` remain the only write path.
 
@@ -133,6 +138,15 @@ Demo fault injection:
 Invoke-RestMethod -Uri "http://localhost:9901/api/demo/faults"
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
+```
+
+Enable the optional LangChain4j Agentic Supervisor locally:
+
+```powershell
+$env:REPAIR_LLM_ENABLED="true"
+$env:REPAIR_LLM_PROVIDER="openai"
+$env:REPAIR_AGENTIC_ENABLED="true"
+$env:REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS="24"
 ```
 
 SSE stream:

@@ -3,6 +3,7 @@ package org.example.agentaiops.llm;
 import dev.langchain4j.community.model.dashscope.QwenChatModel;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import java.time.Duration;
 import org.example.agentaiops.config.RepairProperties;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -89,6 +90,8 @@ public class RepairChatModelProvider {
                 .modelName(openAiModel)
                 .temperature((double) properties.getLlm().getTemperature())
                 .maxTokens(properties.getLlm().getMaxTokens())
+                .timeout(Duration.ofSeconds(properties.getLlm().getTimeoutSeconds()))
+                .maxRetries(properties.getLlm().getMaxRetries())
                 .build();
     }
 

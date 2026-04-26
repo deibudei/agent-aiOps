@@ -69,27 +69,20 @@ public class ReadLogTools {
             return ToolExecutionResult.failure("Log file is empty: " + toolPolicy.display(logPath));
         }
 
-        int markerIndex = lastExceptionMarker(content);
+        int markerIndex = bestExceptionMarker(content);
         if (markerIndex < 0) {
             return ToolExecutionResult.failure("No exception marker found in log file: " + toolPolicy.display(logPath));
         }
 
-        String traceback = extractTail(content, markerIndex, maxChars);
+        String traceback = extractTraceback(content, markerIndex, maxChars);
         return ToolExecutionResult.success("Log source: %s%n%n%s".formatted(toolPolicy.display(logPath), traceback));
     }
 
-    /** Keeps the most relevant tail section around the last exception marker. */
-    private String extractTail(String content, int markerIndex, int maxChars) {
+    /** Keeps the traceback from the error header instead of drifting into framework stack frames. */
+    private String extractTraceback(String content, int markerIndex, int maxChars) {
         int limit = Math.max(1000, maxChars);
-        int start = Math.max(0, markerIndex - limit / 3);
         int end = Math.min(content.length(), markerIndex + limit);
-        String window = content.substring(start, end);
-        int relativeMarker = markerIndex - start;
-        int lineStart = window.lastIndexOf('\n', relativeMarker);
-        if (lineStart >= 0) {
-            return window.substring(lineStart + 1).trim();
-        }
-        return window.trim();
+        return content.substring(markerIndex, end).trim();
     }
 
     private boolean isReadableLogFile(Path path) {
@@ -105,12 +98,57 @@ public class ReadLogTools {
         }
     }
 
-    /** Finds the latest marker that indicates an actual error or Java stack trace. */
-    private int lastExceptionMarker(String content) {
+    /** Finds the best line to start traceback evidence from. */
+    private int bestExceptionMarker(String content) {
+        int metadataException = lastLineContaining(content, "exception=");
+        if (metadataException >= 0) {
+            return metadataException;
+        }
+
         int markerIndex = -1;
-        for (String marker : new String[] {" ERROR ", "Exception", "java.lang.", "Caused by:"}) {
-            markerIndex = Math.max(markerIndex, content.lastIndexOf(marker));
+        int lineStart = 0;
+        while (lineStart < content.length()) {
+            int lineEnd = content.indexOf('\n', lineStart);
+            if (lineEnd < 0) {
+                lineEnd = content.length();
+            }
+            String line = content.substring(lineStart, lineEnd);
+            if (isExceptionHeader(line) || isErrorLogLine(line)) {
+                markerIndex = lineStart;
+            }
+            lineStart = lineEnd + 1;
         }
         return markerIndex;
+    }
+
+    private int lastLineContaining(String content, String marker) {
+        int markerIndex = -1;
+        int lineStart = 0;
+        while (lineStart < content.length()) {
+            int lineEnd = content.indexOf('\n', lineStart);
+            if (lineEnd < 0) {
+                lineEnd = content.length();
+            }
+            String line = content.substring(lineStart, lineEnd);
+            if (line.contains(marker)) {
+                markerIndex = lineStart;
+            }
+            lineStart = lineEnd + 1;
+        }
+        return markerIndex;
+    }
+
+    private boolean isExceptionHeader(String line) {
+        String trimmed = line.trim();
+        if (trimmed.startsWith("at ") || trimmed.startsWith("... ")) {
+            return false;
+        }
+        return trimmed.startsWith("Caused by:")
+                || trimmed.matches(".*\\b[a-zA-Z_$][\\w$]*(\\.[a-zA-Z_$][\\w$]*)*(Exception|Error|Throwable)(:.*)?");
+    }
+
+    private boolean isErrorLogLine(String line) {
+        String trimmed = line.trim();
+        return line.contains(" ERROR ") || trimmed.startsWith("ERROR ");
     }
 }
