@@ -311,18 +311,7 @@ public class RepairProperties {
     }
 
     public static class Agentic {
-        private boolean enabled;
         private int maxSupervisorInvocations = 24;
-
-        /** Returns whether the LangChain4j agentic supervisor path is enabled. */
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        /** Updates whether the LangChain4j agentic supervisor path is enabled. */
-        public void setEnabled(boolean enabled) {
-            this.enabled = enabled;
-        }
 
         /** Returns the maximum number of sub-agent calls the supervisor may make. */
         public int getMaxSupervisorInvocations() {

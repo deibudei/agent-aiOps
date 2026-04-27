@@ -14,6 +14,7 @@ import org.example.agentaiops.repair.model.RepairExecutionResult;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairReflection;
 import org.example.agentaiops.repair.model.RepairStepResult;
+import org.example.agentaiops.repair.model.RepairTiming;
 import org.example.agentaiops.repair.model.ReviewDecision;
 import org.example.agentaiops.repair.model.TestExecutionResult;
 
@@ -23,6 +24,7 @@ public final class AgenticRepairState {
     public final String sessionId;
     public final Instant startedAt;
     public final List<RepairStepResult> steps = new ArrayList<>();
+    private final RepairTimingCollector timingCollector;
     public EvidenceBundle evidenceBundle;
     public String evidence;
     public String diagnosis;
@@ -47,6 +49,7 @@ public final class AgenticRepairState {
     public AgenticRepairState(String sessionId, Instant startedAt) {
         this.sessionId = sessionId;
         this.startedAt = startedAt;
+        this.timingCollector = new RepairTimingCollector(startedAt);
         this.gitCommitResult = new GitCommitResult(false, "", "", "Agent did not run commit step");
         this.pullRequestResult = new PullRequestResult(false, "", "Agent did not run PR step");
         this.notificationResult = new NotificationResult(false, "Agent did not run notification step");
@@ -67,5 +70,17 @@ public final class AgenticRepairState {
     public void step(String toolName, String input, String output, boolean success) {
         steps.add(new RepairStepResult(toolName, input, output, success));
         execution = null;
+    }
+
+    public void beginTiming(String stepName) {
+        timingCollector.begin(stepName);
+    }
+
+    public void endTiming(String stepName, boolean success, String summary) {
+        timingCollector.end(stepName, success, summary);
+    }
+
+    public RepairTiming timing() {
+        return timingCollector.snapshot();
     }
 }

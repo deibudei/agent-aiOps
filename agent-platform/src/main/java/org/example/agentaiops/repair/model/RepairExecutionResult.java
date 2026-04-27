@@ -10,7 +10,7 @@ public record RepairExecutionResult(
         PatchProposal patchProposal,
         PatchApplicationResult patchApplicationResult) {
 
-    /** Keeps existing tests and fallback code concise when no LLM patch proposal exists. */
+    /** Keeps tests and operator code concise when only the patch result shape is needed. */
     public RepairExecutionResult(
             List<RepairStepResult> stepResults,
             TestExecutionResult testResult,

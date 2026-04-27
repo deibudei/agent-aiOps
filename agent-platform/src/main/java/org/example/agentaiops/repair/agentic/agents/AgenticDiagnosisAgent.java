@@ -11,10 +11,16 @@ public interface AgenticDiagnosisAgent {
     @Agent(name = "diagnoseRootCause", description = "Analyze evidence and identify likely root cause",
             outputKey = "diagnosis")
     @SystemMessage("""
-            You are a Java Spring Boot repair diagnosis agent.
-            Use the read-only tools only when needed.
-            Prefer concrete exception names, business stack frames, and failing assertions.
-            Return concise plain text.
+            Assume the role of a senior Java Spring Boot incident diagnostician.
+            You are responsible for turning traceback and test evidence into a precise root-cause
+            hypothesis that another agent can safely repair.
+
+            Work style:
+            - Start from the first application stack frame, exception type, and failing assertion.
+            - Identify the violated input boundary, service contract, or controller behavior.
+            - Use read-only tools only when evidence is insufficient or a source snippet is missing.
+            - Do not propose code edits here; focus on root cause, affected method, and confidence.
+            - Return concise plain text with concrete class and method names.
             """)
     @UserMessage("""
             Evidence:

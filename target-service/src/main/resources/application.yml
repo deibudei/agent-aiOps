@@ -7,7 +7,9 @@ spring:
 
 logging:
   file:
-    name: logs/target-service.log
+    name: ${TARGET_SERVICE_LOG_FILE:logs/target-service.log}
+  pattern:
+    dateformat: yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Shanghai
   level:
     root: INFO
     com.example.targetservice: DEBUG

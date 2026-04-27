@@ -21,5 +21,6 @@ public record RepairRecord(
         GitCommitResult gitCommitResult,
         PullRequestResult pullRequestResult,
         NotificationResult notificationResult,
-        RepairReflection reflection) {
+        RepairReflection reflection,
+        RepairTiming timing) {
 }

@@ -8,6 +8,7 @@ import org.example.agentaiops.repair.agentic.AgenticEvidenceFormatter;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairStage;
+import org.example.agentaiops.repair.model.ToolExecutionResult;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.tool.GitTools;
 import org.example.agentaiops.repair.tool.RepairRecordTools;
@@ -34,8 +35,37 @@ public final class RecordOperator {
                 || state.testResult == null || state.reviewDecision == null || state.reflection == null) {
             throw new IllegalStateException("Agentic repair state is incomplete");
         }
+        state.beginTiming("writeRepairRecord");
+        RepairRecord record;
+        try {
+            record = buildRecord();
+            ToolExecutionResult firstWrite = repairRecordTools.writeRecord(record);
+            if (!firstWrite.success()) {
+                throw new IllegalStateException(firstWrite.error());
+            }
+            state.endTiming("writeRepairRecord", true, firstWrite.output());
+            record = buildRecord();
+            ToolExecutionResult finalWrite = repairRecordTools.writeRecord(record);
+            if (!finalWrite.success()) {
+                throw new IllegalStateException(finalWrite.error());
+            }
+        } catch (RuntimeException e) {
+            state.endTiming("writeRepairRecord", false, e.getMessage());
+            throw e;
+        }
+        state.recordWritten = true;
+        eventHub.publish(state.sessionId, RepairStage.REFLECTING,
+                "Agentic repair record written",
+                Map.of(
+                        "recordVersion", record.recordVersion(),
+                        "stepName", "writeRepairRecord",
+                        "durationMillis", stepDurationMillis(record, "writeRepairRecord")));
+        return record.recordVersion();
+    }
+
+    private RepairRecord buildRecord() {
         state.diff = gitTools.readTargetDiff();
-        RepairRecord record = new RepairRecord(
+        return new RepairRecord(
                 1,
                 state.sessionId,
                 state.startedAt,
@@ -52,11 +82,18 @@ public final class RecordOperator {
                 state.gitCommitResult,
                 state.pullRequestResult,
                 state.notificationResult,
-                state.reflection);
-        repairRecordTools.writeRecord(record);
-        state.recordWritten = true;
-        eventHub.publish(state.sessionId, RepairStage.REFLECTING,
-                "Agentic repair record written", Map.of("recordVersion", record.recordVersion()));
-        return record.recordVersion();
+                state.reflection,
+                state.timing());
+    }
+
+    private long stepDurationMillis(RepairRecord record, String stepName) {
+        if (record.timing() == null) {
+            return 0;
+        }
+        return record.timing().steps().stream()
+                .filter(step -> stepName.equals(step.stepName()))
+                .reduce((first, second) -> second)
+                .map(step -> step.durationMillis())
+                .orElse(0L);
     }
 }

@@ -11,7 +11,19 @@ public interface AgenticPatchAgent {
     @Agent(name = "generatePatchProposal", description = "Generate strict JSON PatchProposal",
             outputKey = "patchJson")
     @SystemMessage("""
-            You are a Java Spring Boot repair executor.
+            Assume the role of a careful Java Spring Boot patch author.
+            You are responsible for producing a minimal, exact, machine-applicable patch proposal.
+            Treat the provided source context as the only writable truth.
+
+            Patch rules:
+            - Fix the root cause directly at the narrowest safe boundary.
+            - Preserve existing public API behavior unless the repair plan requires validation.
+            - Copy oldText exactly from source context, including whitespace and line breaks.
+            - Keep each replacement method-level or smaller when possible.
+            - Include tests only when source context shows the expected regression surface.
+            - Do not invent files or modify agent-platform, root configs, secrets, scripts, or build files.
+            - Return only strict JSON; no markdown, comments, or prose outside the JSON.
+
             Return only strict JSON matching:
             {
               "repairTarget": "same target as the plan",
@@ -28,9 +40,6 @@ public interface AgenticPatchAgent {
               "modelGenerated": true,
               "rawModelOutput": ""
             }
-            oldText must be copied exactly from the source context.
-            Keep oldText/newText to the smallest method-level or line-level replacement that fixes the bug.
-            Do not modify agent-platform, root configs, secrets, scripts, or build files.
             """)
     @UserMessage("""
             Repair plan JSON:

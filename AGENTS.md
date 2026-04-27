@@ -33,15 +33,16 @@ Required demo loop:
 - Frontend is intentionally deferred until backend flow is stable.
 - GitHub PR and Feishu are implemented but disabled by default.
 - Demo fault injection is available under `POST /api/demo/faults/{faultType}/inject`; it writes only fixed demo files under `target-service/src/main`.
-- Runtime 500 traceback logs are written as separate files under `target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log`.
+- Runtime 500 traceback logs are written as separate files under `target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log`, with traceback filenames and file `timestamp=` values formatted in Asia/Shanghai time.
 - `agent-platform` should read traceback evidence from the `target-service/logs` directory, not only from one monolithic log file.
 - Repair records should be written under repo-root `repair-records/`.
 - If records appear under `agent-platform/repair-records/`, the running backend is stale or the workspace root was misdetected; restart `agent-platform` from repo root.
 - Keep `README.zh-CN.md`, `README.md`, and this `AGENTS.md` updated whenever project architecture, commands, environment variables, demo flow, or Agent capability status changes.
 - Keep local cycle reports and private review notes under repo-root `local-reports/`; this directory is gitignored and must not be uploaded to GitHub.
-- Upload-safe config belongs in `agent-platform/src/main/resources/application.yml`; local secrets belong in gitignored `agent-platform/src/main/resources/application-local.yml`.
-- Current Agent maturity: the workflow is wired and includes an optional LangChain4j Agentic Supervisor path. `REPAIR_AGENTIC_ENABLED=true` makes a Supervisor coordinate AI agents for diagnosis/planning/patch proposal and non-AI agents for evidence, patch apply, tests, review, commit, PR, Feishu, reflection, and records. The legacy stable path remains as fallback. Current mainline `target-service` is in the repaired state.
+- Upload-safe config belongs in `agent-platform/src/main/resources/application.yml`; local secrets belong in gitignored `agent-platform/src/main/resources/application-local.yml`, which is imported automatically through the default included `local` profile and `optional:classpath:application-local.yml`.
+- Current Agent maturity: the workflow is LangChain4j Agentic-only. A Supervisor coordinates AI agents for diagnosis/planning/patch proposal and non-AI agents for evidence, patch apply, tests, review, commit, PR, Feishu, reflection, and records. There is no non-Agentic fallback; missing LLM configuration or invalid model JSON publishes a repair `ERROR`. Current mainline `target-service` is in the repaired state.
 - Agentic prompt/SSE payloads are intentionally bounded: traceback, read-file results, source context, and tool event messages are trimmed before they are passed through the Supervisor. This keeps OpenAI-compatible/Qwen calls from timing out on oversized evidence.
+- Repair timing observability is implemented: completed SSE events include `stepName=repairWorkflow` and `durationMillis`, repair record JSON includes `timing`, and repair record Markdown includes a `Timing` table.
 
 ## Local Skill Setup
 
@@ -54,7 +55,7 @@ Useful local skills for the next phase:
 
 ## Next Phase: Real Agent Repair
 
-Use LangChain4j for the LLM planning/proposal layer and optional Agentic Supervisor orchestration while keeping Java tools as the controlled execution layer:
+Use LangChain4j Agentic Supervisor orchestration while keeping Java tools as the controlled execution layer:
 
 - Read traceback/log evidence and failing tests.
 - Ask OpenAI-compatible/Qwen or OpenAI through LangChain4j to produce structured root-cause analysis and repair plans.
@@ -67,7 +68,7 @@ Current implementation status:
 
 1. Structured evidence, repair plans, patch proposals, safe patch application, tests, review gates, and repair records are implemented.
 2. LangChain4j OpenAI-compatible/Qwen integration is implemented with configurable timeout and retry behavior.
-3. Optional `langchain4j-agentic` Supervisor orchestration is implemented and split across `repair/agentic`, `repair/agentic/agents`, and `repair/agentic/operators`.
+3. `langchain4j-agentic` Supervisor orchestration is implemented and split across `repair/agentic`, `repair/agentic/agents`, and `repair/agentic/operators`.
 4. Demo fault injection is available and should be used instead of relying on a future `demo-bug` branch for local replay.
 5. Next work: validate more fault types in Agentic mode, add orchestration-level tests, and improve repair record retrieval/knowledge reuse.
 
@@ -76,11 +77,10 @@ Current implementation status:
 - Dependencies are in `agent-platform/pom.xml`: `dev.langchain4j:langchain4j`, `dev.langchain4j:langchain4j-open-ai`, `dev.langchain4j:langchain4j-community-dashscope`, and `dev.langchain4j:langchain4j-agentic`.
 - `RepairChatModelProvider` lazily builds the configured OpenAI or DashScope `ChatModel`.
 - OpenAI-compatible model calls use configurable `repair.llm.timeout-seconds` and `repair.llm.max-retries`; use `REPAIR_LLM_TIMEOUT_SECONDS` and `REPAIR_LLM_MAX_RETRIES` locally.
-- `LangChainRepairPlanner` asks the configured model for strict JSON `RepairPlan`.
-- `LangChainPatchPlanner` asks the configured model for strict JSON `PatchProposal`.
-- `AgenticRepairRunner` builds the LangChain4j Agentic Supervisor when `repair.agentic.enabled=true`; AI agent interfaces live in `repair/agentic/agents`, non-AI execution nodes live in `repair/agentic/operators`, and shared state/tools/listeners/helpers live directly under `repair/agentic`.
+- `AgenticRepairRunner` builds the LangChain4j Agentic Supervisor; AI agent interfaces live in `repair/agentic/agents`, non-AI execution nodes live in `repair/agentic/operators`, and shared state/tools/listeners/helpers live directly under `repair/agentic`.
 - Agentic AI agents get read-only `@Tool` methods for logs/code. Patch, Git, GitHub, Feishu, reflection, and records remain non-AI agents.
 - `StructuredJsonParser` strips optional markdown fences and rejects invalid JSON.
+- `RepairTimingCollector` records Agentic step timing with monotonic durations and stores it in repair records.
 - LangChain4j does not write files directly. `PatchTools` and `ToolPolicy` remain the only write path.
 
 ## Modules
@@ -137,13 +137,13 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quant
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
 ```
 
-Enable the optional LangChain4j Agentic Supervisor locally:
+Enable LangChain4j Agentic repair locally:
 
 ```powershell
 $env:REPAIR_LLM_ENABLED="true"
 $env:REPAIR_LLM_PROVIDER="openai"
+$env:OPENAI_API_KEY="your OpenAI API key"
 $env:REPAIR_LLM_MAX_TOKENS="4096"
-$env:REPAIR_AGENTIC_ENABLED="true"
 $env:REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS="24"
 ```
 

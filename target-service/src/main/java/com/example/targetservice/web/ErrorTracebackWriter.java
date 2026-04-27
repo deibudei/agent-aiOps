@@ -7,7 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,16 +18,19 @@ import org.springframework.stereotype.Component;
 @Component
 public class ErrorTracebackWriter {
 
+    private static final ZoneId TRACEBACK_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter FILE_TIMESTAMP =
-            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(ZoneOffset.UTC);
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(TRACEBACK_ZONE);
+    private static final DateTimeFormatter CONTENT_TIMESTAMP = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
     private final Path logDirectory;
     private final Clock clock;
 
     /** Uses the target-service traceback log directory from configuration. */
     @Autowired
-    public ErrorTracebackWriter(@Value("${target-service.traceback-log-dir:logs/tracebacks}") String logDirectory) {
-        this(Path.of(logDirectory), Clock.systemUTC());
+    public ErrorTracebackWriter(
+            @Value("${target-service.traceback-log-dir:logs/tracebacks}") String logDirectory) {
+        this(Path.of(logDirectory), Clock.system(TRACEBACK_ZONE));
     }
 
     ErrorTracebackWriter(Path logDirectory, Clock clock) {
@@ -62,7 +66,7 @@ public class ErrorTracebackWriter {
 
                 %s
                 """.formatted(
-                timestamp,
+                CONTENT_TIMESTAMP.format(OffsetDateTime.ofInstant(timestamp, TRACEBACK_ZONE)),
                 traceId,
                 request.getMethod(),
                 request.getRequestURI(),

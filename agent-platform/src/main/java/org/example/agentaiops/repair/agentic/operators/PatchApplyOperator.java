@@ -3,7 +3,7 @@ package org.example.agentaiops.repair.agentic.operators;
 import dev.langchain4j.agentic.Agent;
 import dev.langchain4j.service.V;
 import java.util.Map;
-import org.example.agentaiops.repair.agentic.AgenticFallbacks;
+import org.example.agentaiops.repair.agentic.AgenticOutputFormatter;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.PatchProposal;
 import org.example.agentaiops.repair.model.PatchResult;
@@ -29,7 +29,7 @@ public final class PatchApplyOperator {
     public PatchResult applyPatchProposal(@V("patchProposal") PatchProposal patchProposal) {
         state.patchProposal = patchProposal;
         state.patchApplicationResult = patchTools.applyProposal(patchProposal);
-        state.patchResult = AgenticFallbacks.toPatchResult(state.patchApplicationResult);
+        state.patchResult = AgenticOutputFormatter.toPatchResult(state.patchApplicationResult);
         state.step("PatchTools", state.patchResult.filePath(), state.patchResult.message(),
                 state.patchResult.success());
         eventHub.publish(state.sessionId, RepairStage.PATCHING, state.patchResult.message(),

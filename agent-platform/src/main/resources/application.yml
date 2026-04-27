@@ -2,6 +2,10 @@ server:
   port: 9901
 
 spring:
+  profiles:
+    include: local
+  config:
+    import: optional:classpath:application-local.yml
   application:
     name: agent-platform
   jackson:
@@ -38,12 +42,11 @@ repair:
     enabled: ${FEISHU_ENABLED:false}
     webhook-url: ${FEISHU_WEBHOOK_URL:}
   llm:
-    enabled: ${REPAIR_LLM_ENABLED:false}
+    enabled: ${REPAIR_LLM_ENABLED:true}
     provider: ${REPAIR_LLM_PROVIDER:openai}
     temperature: ${REPAIR_LLM_TEMPERATURE:0.1}
     max-tokens: ${REPAIR_LLM_MAX_TOKENS:4096}
-    timeout-seconds: ${REPAIR_LLM_TIMEOUT_SECONDS:90}
+    timeout-seconds: ${REPAIR_LLM_TIMEOUT_SECONDS:180}
     max-retries: ${REPAIR_LLM_MAX_RETRIES:1}
   agentic:
-    enabled: ${REPAIR_AGENTIC_ENABLED:false}
     max-supervisor-invocations: ${REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS:24}

@@ -35,6 +35,8 @@ class ErrorTracebackWriterTest {
             assertThat(tracebacks).hasSize(2);
         }
         String firstContent = Files.readString(first);
+        assertThat(first.getFileName().toString()).contains("traceback-20260426-163015-000");
+        assertThat(firstContent).contains("timestamp=2026-04-26T16:30:15+08:00");
         assertThat(firstContent).contains("traceId=");
         assertThat(firstContent).contains("path=/api/orders/quote");
         assertThat(firstContent).contains("java.lang.ArithmeticException: / by zero");

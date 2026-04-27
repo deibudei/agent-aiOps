@@ -92,20 +92,20 @@ public class AgenticRepairRunner {
         this.eventHub = eventHub;
     }
 
-    /** Returns true when the supervisor path has both a flag and a configured model. */
+    /** Returns true when the Agentic workflow has a configured model. */
     public boolean available() {
-        return properties.getAgentic().isEnabled() && chatModelProvider.available();
+        return chatModelProvider.available();
     }
 
     /** Runs the supervisor-controlled repair workflow for one session. */
     public void run(String sessionId, Instant startedAt) {
         if (!available()) {
-            throw new IllegalStateException("LangChain4j agentic repair is disabled or LLM is unavailable");
+            throw new IllegalStateException("LangChain4j agentic repair requires a configured LLM");
         }
 
         AgenticRepairState state = new AgenticRepairState(sessionId, startedAt);
         AgenticReadOnlyTools readOnlyTools = new AgenticReadOnlyTools(readLogTools, readCodeTools);
-        RepairAgenticListener listener = new RepairAgenticListener(sessionId, eventHub);
+        RepairAgenticListener listener = new RepairAgenticListener(state, eventHub);
 
         AgenticDiagnosisAgent diagnosisAgent = AgenticServices.agentBuilder(AgenticDiagnosisAgent.class)
                 .chatModel(chatModelProvider.chatModel())
@@ -132,7 +132,7 @@ public class AgenticRepairRunner {
                         new EvidenceOperator(state, evidenceAgent, eventHub),
                         diagnosisAgent,
                         planAgent,
-                        new PlanParserOperator(state, jsonParser, properties, eventHub),
+                        new PlanParserOperator(state, jsonParser, eventHub),
                         new SourceContextOperator(state),
                         patchAgent,
                         new PatchParserOperator(state, jsonParser, eventHub),
@@ -155,45 +155,68 @@ public class AgenticRepairRunner {
         if (!state.recordWritten) {
             new RecordOperator(state, repairRecordTools, gitTools, eventHub).writeRepairRecord();
         }
+        long durationMillis = state.timing().durationMillis();
         eventHub.publish(sessionId, RepairStage.COMPLETED, "Repair workflow completed",
-                Map.of("recordVersion", 1, "mode", "langchain4j-agentic"));
+                Map.of(
+                        "recordVersion", 1,
+                        "mode", "langchain4j-agentic",
+                        "stepName", "repairWorkflow",
+                        "durationMillis", durationMillis));
     }
 
     private String supervisorContext() {
         return """
-                You supervise a safe Java service repair workflow.
-                You must use the available sub-agents to complete the workflow end to end.
+                You are the autonomous repair supervisor for a Java Spring Boot incident.
+                Assume the role of an incident commander and senior maintainer: form hypotheses,
+                delegate to specialist agents, inspect their outputs, and drive the repair to a safe
+                completion. Do not behave like a passive fixed script. Use the available sub-agents
+                only when their role is needed and avoid repeating an agent once it has produced a
+                valid output.
 
-                Required order:
-                1. collectEvidence
-                2. diagnoseRootCause
-                3. generateRepairPlan
-                4. parseRepairPlan
-                5. prepareSourceContext
-                6. generatePatchProposal
-                7. parsePatchProposal
-                8. applyPatchProposal
-                9. runTargetTests
-                10. reviewRepair
-                11. commitRepair
-                12. createPullRequest
-                13. sendNotification
-                14. reflectRepair
-                15. writeRepairRecord
+                Specialist roles:
+                - collectEvidence is the evidence collector. Use it first to gather traceback,
+                  candidate files, tests, and source snippets.
+                - diagnoseRootCause is the root-cause diagnostician. Use it after evidence exists
+                  to identify the failing boundary, application stack frame, and likely contract bug.
+                - generateRepairPlan is the repair planner. Use it to convert the diagnosis into
+                  strict JSON with target files, repair steps, and validation command.
+                - parseRepairPlan is the schema gate. Use it immediately after plan JSON is produced;
+                  stop on invalid JSON.
+                - prepareSourceContext is the source curator. Use it after a valid plan exists to
+                  provide bounded, exact snippets for patch generation.
+                - generatePatchProposal is the patch author. Use it only after source context exists
+                  and require exact oldText/newText replacements.
+                - parsePatchProposal is the patch schema gate. Use it immediately after patch JSON is
+                  produced; stop on invalid JSON or empty operations.
+                - applyPatchProposal, runTargetTests, and reviewRepair are the controlled execution
+                  and safety gates. Use them after a parsed patch exists.
+                - commitRepair, createPullRequest, and sendNotification are release handoff agents.
+                  They respect disabled-mode configuration and may report skipped actions.
+                - reflectRepair and writeRepairRecord capture the learning and final audit trail.
+
+                Dependency rules:
+                - Evidence must exist before diagnosis, planning, or patching.
+                - A parsed RepairPlan must exist before source context and patch generation.
+                - A parsed PatchProposal must exist before applying code changes.
+                - Tests and review must run after patch application and before external handoff.
+                - A repair record must be written before claiming completion.
 
                 Safety:
                 - Only read target-service source and logs.
                 - Only patch target-service/src/main or target-service/src/test through PatchTools.
                 - GitHub and Feishu agents are allowed in the workflow, but they obey disabled-mode config.
-                - Never claim completion until writeRepairRecord has run.
+                - If a schema gate or safety gate fails, stop and surface the error instead of
+                  inventing a fallback patch.
                 """;
     }
 
     private String supervisorRequest() {
         return """
-                Repair the current target-service failure.
-                Follow the required order from the supervisor context.
-                The final result must be a repair record written to repair-records and a concise summary.
+                Repair the current target-service failure as an autonomous multi-agent supervisor.
+                Delegate to the specialist agents according to their roles and dependency rules.
+                Keep the run focused: do not re-invoke agents whose outputs are already valid.
+                The final result must be a safe patch, validation result, repair reflection, and
+                repair record written to repair-records.
                 """;
     }
 }

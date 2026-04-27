@@ -3,7 +3,7 @@ package org.example.agentaiops.repair.agentic.operators;
 import dev.langchain4j.agentic.Agent;
 import dev.langchain4j.service.V;
 import java.util.Map;
-import org.example.agentaiops.repair.agentic.AgenticFallbacks;
+import org.example.agentaiops.repair.agentic.AgenticOutputFormatter;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.GitCommitResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
@@ -31,7 +31,7 @@ public final class PullRequestOperator {
         state.pullRequestResult = gitHubTools.createPullRequest(
                 gitCommitResult.branchName(),
                 "fix: auto repair target-service validation",
-                AgenticFallbacks.buildPrBody(state.sessionId, state.plan, state.reviewDecision));
+                AgenticOutputFormatter.buildPrBody(state.sessionId, state.plan, state.reviewDecision));
         state.step("GitHubTools", gitCommitResult.branchName(), state.pullRequestResult.message(),
                 state.pullRequestResult.success());
         eventHub.publish(state.sessionId, RepairStage.PR_CREATED, state.pullRequestResult.message(),
