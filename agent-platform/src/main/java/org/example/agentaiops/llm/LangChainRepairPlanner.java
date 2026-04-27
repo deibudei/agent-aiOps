@@ -27,8 +27,12 @@ public class LangChainRepairPlanner {
         if (!enabled()) {
             return Optional.empty();
         }
-        String response = chatModelProvider.chatModel().chat(planningPrompt(evidence, toolNames, testCommand));
-        return jsonParser.parse(response, RepairPlan.class);
+        try {
+            String response = chatModelProvider.chatModel().chat(planningPrompt(evidence, toolNames, testCommand));
+            return jsonParser.parse(response, RepairPlan.class);
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
     }
 
     /** Builds the planning prompt with safety boundaries and the expected JSON schema. */

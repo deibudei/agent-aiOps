@@ -63,16 +63,13 @@ Use LangChain4j for the LLM planning/proposal layer and optional Agentic Supervi
 - Review diff/test output with policy checks before GitHub PR and Feishu notification.
 - Persist repair records and reflection for future retrieval/RAG.
 
-Implementation order:
+Current implementation status:
 
-1. Define the Agent contract: `EvidenceBundle`, `RepairAnalysis`, `RepairPlan`, `PatchProposal`, and strict JSON schemas. (started)
-2. Add LangChain4j OpenAI integration with disabled-mode behavior and structured JSON parsing. (started)
-3. Replace `RepairPlannerAgent` hard-coded logic with LLM analysis based on traceback, failing tests, and selected source snippets. (started, fallback remains)
-4. Replace `RepairExecutorAgent` hard-coded string replacement with patch proposal application through `PatchTools` and `ToolPolicy`. (started, fallback remains)
-5. Strengthen review gates: reject unparseable model output, empty diff, out-of-whitelist paths, failing tests, and changes outside `target-service/src/main` or `target-service/src/test`. (started)
-6. Update repair records to include model input summary, model output, patch proposal, retry history, final diff, and reflection. (started)
-7. Add optional `langchain4j-agentic` Supervisor orchestration with AI and non-AI sub-agents. (started)
-8. Keep a deterministic demo reset path, preferably a `demo-bug` branch or documented manual reset, so the competition demo can be replayed.
+1. Structured evidence, repair plans, patch proposals, safe patch application, tests, review gates, and repair records are implemented.
+2. LangChain4j OpenAI-compatible/Qwen integration is implemented with configurable timeout and retry behavior.
+3. Optional `langchain4j-agentic` Supervisor orchestration is implemented and split across `repair/agentic`, `repair/agentic/agents`, and `repair/agentic/operators`.
+4. Demo fault injection is available and should be used instead of relying on a future `demo-bug` branch for local replay.
+5. Next work: validate more fault types in Agentic mode, add orchestration-level tests, and improve repair record retrieval/knowledge reuse.
 
 ## LangChain4j Integration Notes
 
@@ -81,7 +78,7 @@ Implementation order:
 - OpenAI-compatible model calls use configurable `repair.llm.timeout-seconds` and `repair.llm.max-retries`; use `REPAIR_LLM_TIMEOUT_SECONDS` and `REPAIR_LLM_MAX_RETRIES` locally.
 - `LangChainRepairPlanner` asks the configured model for strict JSON `RepairPlan`.
 - `LangChainPatchPlanner` asks the configured model for strict JSON `PatchProposal`.
-- `AgenticRepairRunner` builds the LangChain4j Agentic Supervisor when `repair.agentic.enabled=true`.
+- `AgenticRepairRunner` builds the LangChain4j Agentic Supervisor when `repair.agentic.enabled=true`; AI agent interfaces live in `repair/agentic/agents`, non-AI execution nodes live in `repair/agentic/operators`, and shared state/tools/listeners/helpers live directly under `repair/agentic`.
 - Agentic AI agents get read-only `@Tool` methods for logs/code. Patch, Git, GitHub, Feishu, reflection, and records remain non-AI agents.
 - `StructuredJsonParser` strips optional markdown fences and rejects invalid JSON.
 - LangChain4j does not write files directly. `PatchTools` and `ToolPolicy` remain the only write path.
@@ -97,7 +94,7 @@ Implementation order:
 - `target-service`
   - Spring Boot service under repair.
   - Demo bug scenario: `quantity=0` causes `/ by zero` in `OrderService` before repair.
-  - Current mainline is repaired, so tests should pass. Use a future `demo-bug` branch or reset step to replay the failure.
+  - Current mainline is repaired, so tests should pass. Use the demo fault injection API to replay the failure.
 
 ## Commands
 
@@ -145,6 +142,7 @@ Enable the optional LangChain4j Agentic Supervisor locally:
 ```powershell
 $env:REPAIR_LLM_ENABLED="true"
 $env:REPAIR_LLM_PROVIDER="openai"
+$env:REPAIR_LLM_MAX_TOKENS="4096"
 $env:REPAIR_AGENTIC_ENABLED="true"
 $env:REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS="24"
 ```
@@ -169,7 +167,7 @@ Target service current mainline:
 mvn -pl target-service test
 ```
 
-This should pass on current mainline. The pre-repair failure state still needs a repeatable `demo-bug` branch or documented reset step.
+This should pass on current mainline. Use `POST /api/demo/faults/{faultType}/inject` to replay a pre-repair failure state.
 
 Compile target service without running the intentional failing tests:
 

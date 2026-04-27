@@ -29,15 +29,19 @@ public class LangChainPatchPlanner {
         if (!enabled()) {
             return Optional.empty();
         }
-        String response = chatModelProvider.chatModel().chat(patchPrompt(plan, snippets));
-        return jsonParser.parse(response, PatchProposal.class)
-                .map(proposal -> new PatchProposal(
-                        proposal.repairTarget(),
-                        proposal.rootCause(),
-                        proposal.operations(),
-                        proposal.testsToRun(),
-                        true,
-                        response));
+        try {
+            String response = chatModelProvider.chatModel().chat(patchPrompt(plan, snippets));
+            return jsonParser.parse(response, PatchProposal.class)
+                    .map(proposal -> new PatchProposal(
+                            proposal.repairTarget(),
+                            proposal.rootCause(),
+                            proposal.operations(),
+                            proposal.testsToRun(),
+                            true,
+                            response));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
     }
 
     /** Builds the patch prompt with exact oldText/newText requirements. */
