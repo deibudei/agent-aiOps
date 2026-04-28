@@ -35,29 +35,31 @@ The Agentic flow has been verified end to end on the `quantity-division-by-zero`
 
 ## Current Implementation Status
 
-- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, LangChain4j `@Description` field hints, controlled patch application, tests, review gates, repair records, repair timing observability, demo fault injection, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration, and LangChain4j Agentic orchestration.
+- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, LangChain4j `@Description` field hints, controlled patch application, tests, review gates, repair records, repair timing and token observability, demo fault injection, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration, and LangChain4j Agentic orchestration.
 - Done: Agentic implementation split into `repair/agentic`, `repair/agentic/agents`, and `repair/agentic/operators` so the runner only assembles the supervisor.
 - Still intentionally disabled by default: Git commit/push, GitHub PR creation, and Feishu notification.
 - Next: broaden repair scenarios beyond the first validation bug, add controlled retry/revision after review or test failure, add more Agentic-level tests, improve repair record retrieval/knowledge reuse, and add a frontend workbench after the backend flow stays stable.
 
 The current mainline target service is repaired. Use the demo fault injection endpoints to switch it into a known failure state before testing automatic repair.
 
-## Repair Timing Observability
+## Repair Timing And Token Observability
 
-Repair timing is implemented without shortening the Agentic workflow. The Supervisor, diagnosis, planning, patch proposal, patch application, tests, review, commit, PR, Feishu notification, reflection, and record writing still run; timing data is collected alongside the workflow.
+Repair timing and model usage are implemented without shortening the Agentic workflow. The Supervisor, diagnosis, planning, patch proposal, patch application, tests, review, commit, PR, Feishu notification, reflection, and record writing still run; timing and token data are collected alongside the workflow.
 
 Implemented behavior:
 
-- `RepairTiming` and `RepairStepTiming` capture total duration and per-step timing.
+- `RepairTiming` and `RepairStepTiming` capture total duration, per-step timing, model names, and token counts when a step calls a model.
+- `RepairModelUsage` aggregates per-step model role, configured model, response model, call count, input tokens, output tokens, and total tokens.
 - `RepairTimingCollector` records display timestamps with `Instant.now()` and calculates durations with `System.nanoTime()`.
+- `RepairAgenticListener` reads LangChain4j `AgentResponse.chatResponse().modelName()` and `tokenUsage()` after each AI agent invocation.
 - Agentic agent/operator calls are timed, including evidence, diagnosis, plan, patch, test, review, commit, PR, notification, reflection, and record writing.
-- Completed SSE events include `durationMillis` and `stepName`.
-- `repair-records/{sessionId}.json` includes a `timing` field, and `repair-records/{sessionId}.md` includes a `Timing` table.
+- Completed SSE events include `durationMillis`, `stepName`, and `modelUsage`; AI-agent completion events include the model usage for that agent.
+- `repair-records/{sessionId}.json` includes a `timing` field with `modelUsage`, and `repair-records/{sessionId}.md` includes `Timing` and `Model Usage` tables.
 
 Validation:
 
 - Run `mvn -pl agent-platform test`.
-- Inject `quantity-division-by-zero`, run one Agentic repair, and confirm SSE, JSON, and Markdown records all include total and per-step duration.
+- Inject `quantity-division-by-zero`, run one Agentic repair, and confirm SSE, JSON, and Markdown records all include total duration, per-step duration, model names, and token counts.
 
 ## LangChain4j
 
@@ -123,13 +125,8 @@ REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_MAX_TOKENS=4096
 REPAIR_LLM_TIMEOUT_SECONDS=90
 REPAIR_LLM_MAX_RETRIES=1
-REPAIR_LLM_SUPERVISOR_MODEL=
-REPAIR_LLM_PATCH_MODEL=
-REPAIR_LLM_DIAGNOSIS_MODEL=
-REPAIR_LLM_PLAN_MODEL=
 REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS=24
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 REPAIR_GIT_ENABLED=false
 REPAIR_GITHUB_ENABLED=false
@@ -137,7 +134,7 @@ FEISHU_ENABLED=false
 FEISHU_WEBHOOK_URL=
 ```
 
-For repair runs, `REPAIR_LLM_ENABLED=true` and either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY` are required. If the model is unavailable or returns invalid typed `DiagnosisResult`/`RepairPlan`/`PatchProposal` objects, the workflow publishes an `ERROR` event instead of using a deterministic fallback. For OpenAI-compatible endpoints such as DeepSeek or Qwen, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher. The Agentic path trims traceback, source context, and SSE tool events before sending them through the supervisor. Agentic orchestration is model-sensitive: models that follow structured tool/agent invocation formats more reliably are preferred for demos. The highest-value role-specific override is usually `REPAIR_LLM_SUPERVISOR_MODEL`, followed by `REPAIR_LLM_PATCH_MODEL`.
+For repair runs, `REPAIR_LLM_ENABLED=true`, either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY`, and a model in local config or environment variables are required. If the model is unavailable or returns invalid typed `DiagnosisResult`/`RepairPlan`/`PatchProposal` objects, the workflow publishes an `ERROR` event instead of using a deterministic fallback. For OpenAI-compatible endpoints such as DeepSeek or Qwen, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher. The Agentic path trims traceback, source context, and SSE tool events before sending them through the supervisor. Agentic orchestration is model-sensitive: models that follow structured tool/agent invocation formats more reliably are preferred for demos. The highest-value role-specific override is usually `repair.llm.supervisor-model`, followed by `repair.llm.patch-model`, and these choices should live in `application-local.yml`.
 
 ## Local Profile
 
@@ -153,7 +150,7 @@ Local secrets go in the gitignored file:
 agent-platform/src/main/resources/application-local.yml
 ```
 
-`application.yml` includes the `local` profile and imports this file with `optional:classpath:application-local.yml`, so the normal start command reads it automatically when it exists:
+`application.yml` includes the `local` profile and imports this file with `optional:classpath:application-local.yml`, so the normal start command reads it automatically when it exists. The tracked `application.yml` intentionally does not choose OpenAI/DashScope model names or role-specific model overrides:
 
 ```powershell
 mvn -pl agent-platform spring-boot:run
@@ -175,6 +172,13 @@ openai:
   api-key: "your provider key"
   model: deepseek-v4-flash
   base-url: "your OpenAI-compatible /v1 endpoint"
+
+repair:
+  llm:
+    enabled: true
+    provider: openai
+    supervisor-model: deepseek-v4-flash
+    patch-model: deepseek-v4-flash
 ```
 
 ## Demo Fault Injection

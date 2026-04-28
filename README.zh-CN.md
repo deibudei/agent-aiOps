@@ -48,7 +48,7 @@
 - 安全执行：`PatchTools + ToolPolicy` 是唯一写文件通道。
 - 审查门禁：路径越界、空 diff、测试失败、review 不通过都会阻断后续 commit/PR/飞书。
 - Agentic 编排：`AgenticRepairRunner` 只负责装配 Supervisor，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
-- 修复耗时观测：`RepairTiming` 记录总耗时和每个 Agentic 节点耗时，并写入 SSE、JSON 记录和 Markdown 记录。
+- 修复耗时与 token 观测：`RepairTiming` 记录总耗时、每个 Agentic 节点耗时、模型名称和 token 消耗，并写入 SSE、JSON 记录和 Markdown 记录。
 - 演示故障：已提供 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 三类故障注入 API。
 
 下一步：
@@ -58,22 +58,24 @@
 3. 优化修复记录检索和经验沉淀，后续再决定是否接入向量数据库/RAG。
 4. 后端链路稳定后，再做前端工作台和更复杂触发源。
 
-### 修复耗时观测
+### 修复耗时与 token 观测
 
-当前已经在保持完整 Agentic 修复链路的前提下，量化“修复一个 bug 到底花了多久”。Agentic Supervisor、诊断、计划、补丁、测试、审查、commit、PR、飞书、反思和记录等节点仍然完整执行，计时只作为旁路观测数据。
+当前已经在保持完整 Agentic 修复链路的前提下，量化“修复一个 bug 到底花了多久、每个模型步骤花了多少 token”。Agentic Supervisor、诊断、计划、补丁、测试、审查、commit、PR、飞书、反思和记录等节点仍然完整执行，观测数据只作为旁路记录。
 
 已实现：
 
-- `RepairTiming` 和 `RepairStepTiming` 记录总耗时、每个步骤开始/结束时间、耗时、成功状态和摘要。
+- `RepairTiming` 和 `RepairStepTiming` 记录总耗时、每个步骤开始/结束时间、耗时、成功状态、摘要、模型名称和 token 数。
+- `RepairModelUsage` 汇总每个模型步骤的角色、配置模型、响应模型、调用次数、input tokens、output tokens 和 total tokens。
 - 内部 `RepairTimingCollector` 用 `Instant.now()` 记录展示时间，用 `System.nanoTime()` 计算耗时，避免系统时间跳变影响统计。
+- `RepairAgenticListener` 在每个 AI Agent 完成后读取 LangChain4j `AgentResponse.chatResponse().modelName()` 和 `tokenUsage()`。
 - Agentic 链路对 evidence、diagnosis、plan、patch、test、review、commit、PR、notify、reflect、record 等节点逐个计时。
-- SSE 完成事件的 `details` 增加 `durationMillis` 和 `stepName`，方便前端或命令行直接观察耗时。
-- `repair-records/{sessionId}.json` 增加 `timing` 字段，`repair-records/{sessionId}.md` 增加 `Timing` 表格，用于后续报告和性能分析。
+- SSE 完成事件的 `details` 增加 `durationMillis`、`stepName` 和 `modelUsage`；AI Agent 完成事件会带上该 Agent 的模型/token 使用情况。
+- `repair-records/{sessionId}.json` 增加 `timing.modelUsage` 字段，`repair-records/{sessionId}.md` 增加 `Timing` 和 `Model Usage` 表格，用于后续报告和性能分析。
 
 验收方式：
 
 - `mvn -pl agent-platform test`
-- 注入 `quantity-division-by-zero` 后跑一次 Agentic 修复，确认 SSE、JSON 记录和 Markdown 记录里都能看到总耗时和步骤耗时。
+- 注入 `quantity-division-by-zero` 后跑一次 Agentic 修复，确认 SSE、JSON 记录和 Markdown 记录里都能看到总耗时、步骤耗时、模型名称和 token 消耗。
 
 ## LangChain4j 集成说明
 
@@ -96,18 +98,13 @@ LangChain4j Agentic Supervisor + @Tool 只读工具 + non-AI Agent 安全执行
 $env:REPAIR_LLM_ENABLED="true"
 $env:REPAIR_LLM_PROVIDER="openai"
 $env:OPENAI_API_KEY="你的 OpenAI API Key"
-$env:OPENAI_MODEL="gpt-4o-mini"
 $env:OPENAI_BASE_URL="https://api.openai.com/v1"
 $env:REPAIR_LLM_TIMEOUT_SECONDS="90"
 $env:REPAIR_LLM_MAX_RETRIES="1"
 $env:REPAIR_LLM_MAX_TOKENS="4096"
-$env:REPAIR_LLM_SUPERVISOR_MODEL=""
-$env:REPAIR_LLM_PATCH_MODEL=""
-$env:REPAIR_LLM_DIAGNOSIS_MODEL=""
-$env:REPAIR_LLM_PLAN_MODEL=""
 ```
 
-如果使用 OpenAI-compatible 模型（例如 DeepSeek、Qwen 等）时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。Agentic 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上。四个模型角色里，`repairSupervisor` 最吃模型的工具调用/指令遵循能力，其次是 `AgenticPatchAgent` 的精确代码修改能力；`AgenticDiagnosisAgent` 和 `AgenticPlanAgent` 通常可以先用默认模型，复杂或多因子故障再单独升配。
+模型名和分角色模型覆盖建议放在 `application-local.yml`，不要放在可上传的 `application.yml`。如果使用 OpenAI-compatible 模型（例如 DeepSeek、Qwen 等）时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。Agentic 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上。四个模型角色里，`repairSupervisor` 最吃模型的工具调用/指令遵循能力，其次是 `AgenticPatchAgent` 的精确代码修改能力；`AgenticDiagnosisAgent` 和 `AgenticPlanAgent` 通常可以先用默认模型，复杂或多因子故障再单独升配。
 
 如果 `REPAIR_LLM_ENABLED` 未启用或缺少 API key，`POST /api/repair/run` 会接受请求但在 SSE 中发布 `error` 事件，不会执行旧修复链路。
 
@@ -282,10 +279,6 @@ REPAIR_LLM_ENABLED=true
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_TEMPERATURE=0.1
 REPAIR_LLM_MAX_TOKENS=4096
-REPAIR_LLM_SUPERVISOR_MODEL=
-REPAIR_LLM_PATCH_MODEL=
-REPAIR_LLM_DIAGNOSIS_MODEL=
-REPAIR_LLM_PLAN_MODEL=
 REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS=24
 
 REPAIR_TARGET_LOG=target-service/logs
@@ -293,11 +286,9 @@ TARGET_SERVICE_LOG_FILE=logs/target-service.log
 TARGET_SERVICE_TRACEBACK_LOG_DIR=logs/tracebacks
 
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 
 DASHSCOPE_API_KEY=
-DASHSCOPE_MODEL=qwen-max
 DASHSCOPE_BASE_URL=
 
 REPAIR_GIT_ENABLED=false
@@ -323,7 +314,7 @@ agent-platform/src/main/resources/application.yml
 agent-platform/src/main/resources/application-local.yml
 ```
 
-`application-local.yml` 已加入 `.gitignore`，可以在里面填写真实 key，不要上传。`application.yml` 默认 include `local` profile，并通过 `optional:classpath:application-local.yml` 自动导入它，因此正常启动命令就会读取本地配置：
+`application-local.yml` 已加入 `.gitignore`，可以在里面填写真实 key 和本地模型选择，不要上传。`application.yml` 默认 include `local` profile，并通过 `optional:classpath:application-local.yml` 自动导入它，因此正常启动命令就会读取本地配置。当前可上传的 `application.yml` 不再选择 OpenAI/DashScope 默认模型，也不再写 supervisor/diagnosis/plan/patch 分角色模型覆盖：
 
 ```powershell
 cd D:\java_web_project\agent-aiOps
@@ -342,6 +333,8 @@ repair:
   llm:
     enabled: true
     provider: openai
+    supervisor-model: deepseek-v4-flash
+    patch-model: deepseek-v4-flash
 ```
 
 隐私注意：
@@ -349,7 +342,7 @@ repair:
 - 不要把真实 `OPENAI_API_KEY`、`DASHSCOPE_API_KEY`、`FEISHU_WEBHOOK_URL` 写入 README 或提交到 Git。
 - 建议只在 PowerShell 环境变量里配置 key。
 - `.gitignore` 已忽略 `.env`、`.env.*`、`*.secret`、`local-secrets/`、`local-reports/`。
-- `agent-platform/src/main/resources/application.yml` 当前只保留环境变量占位，不应写入真实 key。
+- `agent-platform/src/main/resources/application.yml` 当前只保留上传安全的通用默认值，不应写入真实 key 或本地模型选择。
 
 说明：
 

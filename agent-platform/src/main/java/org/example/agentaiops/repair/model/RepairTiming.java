@@ -8,5 +8,14 @@ public record RepairTiming(
         Instant startedAt,
         Instant completedAt,
         long durationMillis,
-        List<RepairStepTiming> steps) {
+        List<RepairStepTiming> steps,
+        List<RepairModelUsage> modelUsage) {
+
+    public RepairTiming(
+            Instant startedAt,
+            Instant completedAt,
+            long durationMillis,
+            List<RepairStepTiming> steps) {
+        this(startedAt, completedAt, durationMillis, steps, List.of());
+    }
 }

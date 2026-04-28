@@ -3,6 +3,7 @@ package org.example.agentaiops.repair.agentic;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.example.agentaiops.repair.model.EvidenceBundle;
 import org.example.agentaiops.repair.model.DiagnosisResult;
 import org.example.agentaiops.repair.model.GitCommitResult;
@@ -12,6 +13,7 @@ import org.example.agentaiops.repair.model.PatchProposal;
 import org.example.agentaiops.repair.model.PatchResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
 import org.example.agentaiops.repair.model.RepairExecutionResult;
+import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairReflection;
 import org.example.agentaiops.repair.model.RepairStepResult;
@@ -77,6 +79,19 @@ public final class AgenticRepairState {
 
     public void endTiming(String stepName, boolean success, String summary) {
         timingCollector.end(stepName, success, summary);
+    }
+
+    public RepairModelUsage recordModelUsage(
+            String stepName, String role, String configuredModel, ChatResponse chatResponse) {
+        if (chatResponse == null) {
+            return null;
+        }
+        return timingCollector.recordModelUsage(
+                stepName,
+                role,
+                configuredModel,
+                chatResponse.modelName(),
+                chatResponse.tokenUsage());
     }
 
     public RepairTiming timing() {

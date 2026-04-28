@@ -102,7 +102,11 @@ public class AgenticRepairRunner {
 
         AgenticRepairState state = new AgenticRepairState(sessionId, startedAt);
         AgenticReadOnlyTools readOnlyTools = new AgenticReadOnlyTools(readLogTools, readCodeTools);
-        RepairAgenticListener listener = new RepairAgenticListener(state, eventHub);
+        RepairAgenticListener listener = new RepairAgenticListener(
+                state,
+                eventHub,
+                roleByAgent(),
+                modelByAgent());
 
         AgenticDiagnosisAgent diagnosisAgent = AgenticServices.agentBuilder(AgenticDiagnosisAgent.class)
                 .chatModel(chatModelProvider.chatModel(RepairModelRole.DIAGNOSIS))
@@ -149,16 +153,32 @@ public class AgenticRepairRunner {
         eventHub.publish(sessionId, RepairStage.EXECUTING, "Starting LangChain4j agentic supervisor");
         ResultWithAgenticScope<String> result = supervisor.invokeWithAgenticScope(supervisorRequest());
         state.supervisorSummary = result.result();
-        if (!state.recordWritten) {
-            new RecordOperator(state, repairRecordTools, gitTools, eventHub).writeRepairRecord();
-        }
-        long durationMillis = state.timing().durationMillis();
+        new RecordOperator(state, repairRecordTools, gitTools, eventHub).rewriteFinalRecord();
+        var timing = state.timing();
+        long durationMillis = timing.durationMillis();
         eventHub.publish(sessionId, RepairStage.COMPLETED, "Repair workflow completed",
                 Map.of(
                         "recordVersion", 1,
                         "mode", "langchain4j-agentic",
                         "stepName", "repairWorkflow",
-                        "durationMillis", durationMillis));
+                        "durationMillis", durationMillis,
+                        "modelUsage", timing.modelUsage()));
+    }
+
+    private Map<String, String> roleByAgent() {
+        return Map.of(
+                "repairSupervisor", RepairModelRole.SUPERVISOR.name(),
+                "diagnoseRootCause", RepairModelRole.DIAGNOSIS.name(),
+                "generateRepairPlan", RepairModelRole.PLAN.name(),
+                "generatePatchProposal", RepairModelRole.PATCH.name());
+    }
+
+    private Map<String, String> modelByAgent() {
+        return Map.of(
+                "repairSupervisor", chatModelProvider.modelName(RepairModelRole.SUPERVISOR),
+                "diagnoseRootCause", chatModelProvider.modelName(RepairModelRole.DIAGNOSIS),
+                "generateRepairPlan", chatModelProvider.modelName(RepairModelRole.PLAN),
+                "generatePatchProposal", chatModelProvider.modelName(RepairModelRole.PATCH));
     }
 
     private String supervisorContext() {

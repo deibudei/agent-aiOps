@@ -59,6 +59,13 @@ public class RepairReviewerAgent {
         }
 
         if (changedFiles.isEmpty()) {
+            if (isCleanDemoRestoration(executionResult)) {
+                return new ReviewDecision(
+                        ReviewStatus.PASS,
+                        "Patch restored target-service to the current clean baseline and tests pass.",
+                        "Low risk: demo fault injection was repaired back to HEAD, so no Git diff remains.",
+                        changedFiles);
+            }
             return new ReviewDecision(
                     ReviewStatus.REJECT,
                     "No target-service diff was produced.",
@@ -87,5 +94,26 @@ public class RepairReviewerAgent {
                 "Patch is limited to target-service and tests pass.",
                 "Low risk: a defensive parameter validation was added before division.",
                 changedFiles);
+    }
+
+    private boolean isCleanDemoRestoration(RepairExecutionResult executionResult) {
+        if (executionResult.patchApplicationResult() == null
+                || !executionResult.patchApplicationResult().success()
+                || executionResult.patchApplicationResult().patchResults() == null
+                || executionResult.patchApplicationResult().patchResults().isEmpty()
+                || executionResult.patchProposal() == null
+                || executionResult.patchProposal().operations() == null
+                || executionResult.patchProposal().operations().isEmpty()) {
+            return false;
+        }
+        boolean changedOperation = executionResult.patchProposal().operations().stream()
+                .anyMatch(operation -> operation.oldText() != null
+                        && operation.newText() != null
+                        && !operation.oldText().equals(operation.newText()));
+        boolean appliedPatch = executionResult.patchApplicationResult().patchResults().stream()
+                .allMatch(result -> result.success()
+                        && result.filePath() != null
+                        && result.filePath().startsWith("target-service/src/"));
+        return changedOperation && appliedPatch;
     }
 }

@@ -11,6 +11,7 @@ import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.repair.model.GitCommitResult;
 import org.example.agentaiops.repair.model.NotificationResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
+import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairReflection;
@@ -41,8 +42,12 @@ class RepairRecordToolsTest {
         String markdown = Files.readString(tempDir.resolve("repair-records/timing-session.md"));
         assertThat(json).contains("\"timing\"");
         assertThat(json).contains("\"durationMillis\" : 1234");
+        assertThat(json).contains("\"modelUsage\"");
+        assertThat(json).contains("\"totalTokenCount\" : 120");
         assertThat(markdown).contains("## Timing");
+        assertThat(markdown).contains("## Model Usage");
         assertThat(markdown).contains("| collectEvidence | 10 | true |");
+        assertThat(markdown).contains("| generateRepairPlan | PLAN | deepseek-v4-flash |");
     }
 
     private RepairRecord recordWithTiming() {
@@ -57,7 +62,16 @@ class RepairRecordToolsTest {
                         started.plusMillis(10),
                         10,
                         true,
-                        "evidence collected")));
+                        "evidence collected")),
+                List.of(new RepairModelUsage(
+                        "generateRepairPlan",
+                        "PLAN",
+                        "deepseek-v4-flash",
+                        "deepseek-v4-flash",
+                        1,
+                        100,
+                        20,
+                        120)));
         return new RepairRecord(
                 1,
                 "timing-session",

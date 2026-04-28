@@ -25,17 +25,17 @@ public final class CommitOperator {
     }
 
     @Agent(name = "commitRepair", description = "Create repair branch and commit when review passes",
-            outputKey = "gitCommitResult")
-    public GitCommitResult commitRepair(@V("reviewDecision") ReviewDecision reviewDecision) {
+            outputKey = "gitCommitMessage")
+    public String commitRepair(@V("reviewDecision") ReviewDecision reviewDecision) {
         if (reviewDecision.status() != ReviewStatus.PASS) {
             state.gitCommitResult = new GitCommitResult(false, "", "", "Review did not pass");
-            return state.gitCommitResult;
+            return state.gitCommitResult.message();
         }
         eventHub.publish(state.sessionId, RepairStage.COMMITTING, "Creating repair branch and commit");
         state.gitCommitResult = gitTools.commitAndPush(state.sessionId);
         state.step("GitTools", state.sessionId, state.gitCommitResult.message(), state.gitCommitResult.success());
         eventHub.publish(state.sessionId, RepairStage.COMMITTING, state.gitCommitResult.message(),
                 Map.of("git", state.gitCommitResult));
-        return state.gitCommitResult;
+        return state.gitCommitResult.message();
     }
 }

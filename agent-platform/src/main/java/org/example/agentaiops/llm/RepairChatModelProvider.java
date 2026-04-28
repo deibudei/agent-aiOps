@@ -26,10 +26,10 @@ public class RepairChatModelProvider {
     public RepairChatModelProvider(
             RepairProperties properties,
             @Value("${openai.api-key:}") String openAiApiKey,
-            @Value("${openai.model:gpt-4o-mini}") String openAiModel,
+            @Value("${openai.model:}") String openAiModel,
             @Value("${openai.base-url:https://api.openai.com/v1}") String openAiBaseUrl,
             @Value("${dashscope.api-key:}") String dashScopeApiKey,
-            @Value("${dashscope.model:qwen-max}") String dashScopeModel,
+            @Value("${dashscope.model:}") String dashScopeModel,
             @Value("${dashscope.base-url:}") String dashScopeBaseUrl) {
         this.properties = properties;
         this.openAiApiKey = openAiApiKey;
@@ -77,6 +77,10 @@ public class RepairChatModelProvider {
             throw new IllegalStateException("Repair LLM is disabled or provider API key is not configured");
         }
         String modelName = modelName(role);
+        if (!hasText(modelName)) {
+            throw new IllegalStateException("Repair LLM model is not configured for role " + role
+                    + "; set openai.model/dashscope.model or a repair.llm.*-model override in application-local.yml");
+        }
         String key = provider() + ":" + modelName;
         return chatModels.computeIfAbsent(key, ignored -> switch (provider()) {
             case "openai" -> buildOpenAiModel(modelName);

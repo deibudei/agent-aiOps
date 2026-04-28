@@ -63,6 +63,19 @@ public final class RecordOperator {
         return record.recordVersion();
     }
 
+    /** Rewrites the final record after the supervisor itself has emitted model usage. */
+    public void rewriteFinalRecord() {
+        if (!state.recordWritten) {
+            writeRepairRecord();
+            return;
+        }
+        RepairRecord record = buildRecord();
+        ToolExecutionResult result = repairRecordTools.writeRecord(record);
+        if (!result.success()) {
+            throw new IllegalStateException(result.error());
+        }
+    }
+
     private RepairRecord buildRecord() {
         state.diff = gitTools.readTargetDiff();
         return new RepairRecord(
