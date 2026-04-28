@@ -248,6 +248,10 @@ public class RepairProperties {
         private int maxTokens = 2048;
         private int timeoutSeconds = 90;
         private int maxRetries = 1;
+        private String supervisorModel = "";
+        private String diagnosisModel = "";
+        private String planModel = "";
+        private String patchModel = "";
 
         /** Returns whether LLM planning and patch proposal are enabled. */
         public boolean isEnabled() {
@@ -307,6 +311,46 @@ public class RepairProperties {
         /** Updates how many provider retries LangChain4j should perform. */
         public void setMaxRetries(int maxRetries) {
             this.maxRetries = maxRetries;
+        }
+
+        /** Returns the optional model override for the Agentic supervisor. */
+        public String getSupervisorModel() {
+            return supervisorModel;
+        }
+
+        /** Updates the optional model override for the Agentic supervisor. */
+        public void setSupervisorModel(String supervisorModel) {
+            this.supervisorModel = supervisorModel;
+        }
+
+        /** Returns the optional model override for diagnosis. */
+        public String getDiagnosisModel() {
+            return diagnosisModel;
+        }
+
+        /** Updates the optional model override for diagnosis. */
+        public void setDiagnosisModel(String diagnosisModel) {
+            this.diagnosisModel = diagnosisModel;
+        }
+
+        /** Returns the optional model override for repair planning. */
+        public String getPlanModel() {
+            return planModel;
+        }
+
+        /** Updates the optional model override for repair planning. */
+        public void setPlanModel(String planModel) {
+            this.planModel = planModel;
+        }
+
+        /** Returns the optional model override for patch proposal generation. */
+        public String getPatchModel() {
+            return patchModel;
+        }
+
+        /** Updates the optional model override for patch proposal generation. */
+        public void setPatchModel(String patchModel) {
+            this.patchModel = patchModel;
         }
     }
 

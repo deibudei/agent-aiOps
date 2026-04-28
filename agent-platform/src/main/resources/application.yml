@@ -48,5 +48,9 @@ repair:
     max-tokens: ${REPAIR_LLM_MAX_TOKENS:4096}
     timeout-seconds: ${REPAIR_LLM_TIMEOUT_SECONDS:180}
     max-retries: ${REPAIR_LLM_MAX_RETRIES:1}
+    supervisor-model: ${REPAIR_LLM_SUPERVISOR_MODEL:}
+    diagnosis-model: ${REPAIR_LLM_DIAGNOSIS_MODEL:}
+    plan-model: ${REPAIR_LLM_PLAN_MODEL:}
+    patch-model: ${REPAIR_LLM_PATCH_MODEL:}
   agentic:
     max-supervisor-invocations: ${REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS:24}

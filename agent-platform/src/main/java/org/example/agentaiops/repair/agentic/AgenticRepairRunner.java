@@ -8,7 +8,7 @@ import java.time.Instant;
 import java.util.Map;
 import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.llm.RepairChatModelProvider;
-import org.example.agentaiops.llm.StructuredJsonParser;
+import org.example.agentaiops.llm.RepairModelRole;
 import org.example.agentaiops.repair.agent.EvidenceAgent;
 import org.example.agentaiops.repair.agent.RepairReflectionAgent;
 import org.example.agentaiops.repair.agent.RepairReviewerAgent;
@@ -44,7 +44,6 @@ public class AgenticRepairRunner {
 
     private final RepairProperties properties;
     private final RepairChatModelProvider chatModelProvider;
-    private final StructuredJsonParser jsonParser;
     private final EvidenceAgent evidenceAgent;
     private final ReadLogTools readLogTools;
     private final ReadCodeTools readCodeTools;
@@ -62,7 +61,6 @@ public class AgenticRepairRunner {
     public AgenticRepairRunner(
             RepairProperties properties,
             RepairChatModelProvider chatModelProvider,
-            StructuredJsonParser jsonParser,
             EvidenceAgent evidenceAgent,
             ReadLogTools readLogTools,
             ReadCodeTools readCodeTools,
@@ -77,7 +75,6 @@ public class AgenticRepairRunner {
             RepairEventHub eventHub) {
         this.properties = properties;
         this.chatModelProvider = chatModelProvider;
-        this.jsonParser = jsonParser;
         this.evidenceAgent = evidenceAgent;
         this.readLogTools = readLogTools;
         this.readCodeTools = readCodeTools;
@@ -108,23 +105,23 @@ public class AgenticRepairRunner {
         RepairAgenticListener listener = new RepairAgenticListener(state, eventHub);
 
         AgenticDiagnosisAgent diagnosisAgent = AgenticServices.agentBuilder(AgenticDiagnosisAgent.class)
-                .chatModel(chatModelProvider.chatModel())
+                .chatModel(chatModelProvider.chatModel(RepairModelRole.DIAGNOSIS))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPlanAgent planAgent = AgenticServices.agentBuilder(AgenticPlanAgent.class)
-                .chatModel(chatModelProvider.chatModel())
+                .chatModel(chatModelProvider.chatModel(RepairModelRole.PLAN))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPatchAgent patchAgent = AgenticServices.agentBuilder(AgenticPatchAgent.class)
-                .chatModel(chatModelProvider.chatModel())
+                .chatModel(chatModelProvider.chatModel(RepairModelRole.PATCH))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
 
         SupervisorAgent supervisor = AgenticServices.supervisorBuilder()
-                .chatModel(chatModelProvider.chatModel())
+                .chatModel(chatModelProvider.chatModel(RepairModelRole.SUPERVISOR))
                 .name("repairSupervisor")
                 .description("Autonomously coordinates target-service repair agents")
                 .supervisorContext(supervisorContext())
@@ -132,10 +129,10 @@ public class AgenticRepairRunner {
                         new EvidenceOperator(state, evidenceAgent, eventHub),
                         diagnosisAgent,
                         planAgent,
-                        new PlanParserOperator(state, jsonParser, eventHub),
+                        new PlanParserOperator(state, eventHub),
                         new SourceContextOperator(state),
                         patchAgent,
-                        new PatchParserOperator(state, jsonParser, eventHub),
+                        new PatchParserOperator(state, eventHub),
                         new PatchApplyOperator(state, patchTools, eventHub),
                         new TestOperator(state, runTestTools, properties, eventHub),
                         new ReviewOperator(state, reviewerAgent, eventHub),
@@ -179,15 +176,15 @@ public class AgenticRepairRunner {
                 - diagnoseRootCause is the root-cause diagnostician. Use it after evidence exists
                   to identify the failing boundary, application stack frame, and likely contract bug.
                 - generateRepairPlan is the repair planner. Use it to convert the diagnosis into
-                  strict JSON with target files, repair steps, and validation command.
-                - parseRepairPlan is the schema gate. Use it immediately after plan JSON is produced;
-                  stop on invalid JSON.
+                  a typed RepairPlan with target files, repair steps, and validation command.
+                - parseRepairPlan is the plan gate. Use it immediately after the typed plan is
+                  produced; stop if required fields or allowed paths are invalid.
                 - prepareSourceContext is the source curator. Use it after a valid plan exists to
                   provide bounded, exact snippets for patch generation.
                 - generatePatchProposal is the patch author. Use it only after source context exists
                   and require exact oldText/newText replacements.
-                - parsePatchProposal is the patch schema gate. Use it immediately after patch JSON is
-                  produced; stop on invalid JSON or empty operations.
+                - parsePatchProposal is the patch gate. Use it immediately after typed PatchProposal
+                  is produced; stop on invalid required fields, paths, tests, or empty operations.
                 - applyPatchProposal, runTargetTests, and reviewRepair are the controlled execution
                   and safety gates. Use them after a parsed patch exists.
                 - commitRepair, createPullRequest, and sendNotification are release handoff agents.
@@ -196,7 +193,7 @@ public class AgenticRepairRunner {
 
                 Dependency rules:
                 - Evidence must exist before diagnosis, planning, or patching.
-                - A parsed RepairPlan must exist before source context and patch generation.
+                - A validated RepairPlan must exist before source context and patch generation.
                 - A parsed PatchProposal must exist before applying code changes.
                 - Tests and review must run after patch application and before external handoff.
                 - A repair record must be written before claiming completion.

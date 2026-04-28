@@ -30,9 +30,9 @@
 当前代码已经打通后端闭环，并收敛为 LangChain4j Agentic Supervisor 单一路径：
 
 - 已实现：异常读取、计划阶段、代码读取、代码修改、测试执行、diff review、GitHub PR 工具、飞书通知工具、修复记录和反思沉淀。
-- 当前进展：已接入 `langchain4j-agentic`，Supervisor 自主编排是唯一修复路径；OpenAI-compatible/Qwen 是本地默认模型形态，DashScope provider 保留。
-- 当前模式：AI 子 Agent 负责诊断、计划和补丁 proposal；non-AI Agent 负责收集证据、应用补丁、跑测试、审查、commit、PR、飞书、反思和记录。
-- 已验证：`quantity-division-by-zero` 故障下，Agentic 链路能读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review，并写入修复记录。
+- 当前进展：已接入 `langchain4j-agentic`，Supervisor 自主编排是唯一修复路径；OpenAI-compatible 是主要本地模型接入形态，可接 DeepSeek、Qwen 等兼容端点，DashScope provider 保留。
+- 当前模式：AI 子 Agent 负责诊断、计划和补丁 proposal，并都返回强类型对象；non-AI Agent 负责收集证据、应用补丁、跑测试、审查、commit、PR、飞书、反思和记录。
+- 已验证：`quantity-division-by-zero` 故障下，Agentic 链路能读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review，并写入修复记录。回滚后的本地 `rollback-e2e-001` 使用 `deepseek-v4-flash` 完成完整修复链路，耗时约 93 秒，Git/GitHub/飞书因默认关闭而安全跳过。
 - 当前限制：修复运行必须配置 `REPAIR_LLM_ENABLED=true` 和对应 provider API key；模型不可用或 JSON 输出非法会发布 `ERROR`，不再走确定性 fallback。写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
 
 ## 当前实现状态与下一步
@@ -42,8 +42,9 @@
 已完成：
 
 - 结构化证据：`EvidenceBundle` 聚合 traceback、baseline tests、候选文件和源码片段。
-- Agentic 规划：LangChain4j Agentic 子 Agent 生成严格 JSON `RepairPlan`。
-- Agentic 补丁：LangChain4j Agentic 子 Agent 生成严格 JSON `PatchProposal`。
+- Agentic 诊断：LangChain4j Agentic 子 Agent 直接返回强类型 `DiagnosisResult`，字段使用 `@Description` 描述。
+- Agentic 规划：LangChain4j Agentic 子 Agent 直接返回强类型 `RepairPlan`，字段使用 `@Description` 描述，并在 prompt 中提供两个 few-shot 示例。
+- Agentic 补丁：LangChain4j Agentic 子 Agent 直接返回强类型 `PatchProposal`，字段使用 `@Description` 描述，并由 Java gate 做业务校验。
 - 安全执行：`PatchTools + ToolPolicy` 是唯一写文件通道。
 - 审查门禁：路径越界、空 diff、测试失败、review 不通过都会阻断后续 commit/PR/飞书。
 - Agentic 编排：`AgenticRepairRunner` 只负责装配 Supervisor，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
@@ -84,9 +85,9 @@ LangChain4j Agentic Supervisor + @Tool 只读工具 + non-AI Agent 安全执行
 
 关键类：
 
-- `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`。
+- `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`，并支持 supervisor/diagnosis/plan/patch 分角色模型覆盖。
 - `AgenticRepairRunner`：构建 Supervisor；具体 AI Agent 接口拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
-- `StructuredJsonParser`：抽取和解析模型 JSON，解析失败则拒绝结果。
+- `AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent`：直接返回强类型对象，字段使用 LangChain4j `@Description` 描述；Plan/Patch prompt 内置 few-shot 示例。
 - `PatchTools`：唯一允许写入文件的工具，模型不能直接写文件。
 
 启用 OpenAI LLM：
@@ -100,9 +101,13 @@ $env:OPENAI_BASE_URL="https://api.openai.com/v1"
 $env:REPAIR_LLM_TIMEOUT_SECONDS="90"
 $env:REPAIR_LLM_MAX_RETRIES="1"
 $env:REPAIR_LLM_MAX_TOKENS="4096"
+$env:REPAIR_LLM_SUPERVISOR_MODEL=""
+$env:REPAIR_LLM_PATCH_MODEL=""
+$env:REPAIR_LLM_DIAGNOSIS_MODEL=""
+$env:REPAIR_LLM_PLAN_MODEL=""
 ```
 
-如果使用 OpenAI-compatible 的 Qwen 模型时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。Agentic 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上，避免补丁 JSON 被截断。
+如果使用 OpenAI-compatible 模型（例如 DeepSeek、Qwen 等）时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。Agentic 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上。四个模型角色里，`repairSupervisor` 最吃模型的工具调用/指令遵循能力，其次是 `AgenticPatchAgent` 的精确代码修改能力；`AgenticDiagnosisAgent` 和 `AgenticPlanAgent` 通常可以先用默认模型，复杂或多因子故障再单独升配。
 
 如果 `REPAIR_LLM_ENABLED` 未启用或缺少 API key，`POST /api/repair/run` 会接受请求但在 SSE 中发布 `error` 事件，不会执行旧修复链路。
 
@@ -258,7 +263,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quant
 mvn -pl target-service test
 ```
 
-如果要通过 HTTP 触发运行时异常，需要重启 `target-service` 后再请求：
+故障注入和恢复只改源码，不会热更新正在运行的 `target-service`。如果要通过 HTTP 触发运行时异常，需要重启 `target-service` 后再请求：
 
 ```powershell
 Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
@@ -277,6 +282,10 @@ REPAIR_LLM_ENABLED=true
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_TEMPERATURE=0.1
 REPAIR_LLM_MAX_TOKENS=4096
+REPAIR_LLM_SUPERVISOR_MODEL=
+REPAIR_LLM_PATCH_MODEL=
+REPAIR_LLM_DIAGNOSIS_MODEL=
+REPAIR_LLM_PLAN_MODEL=
 REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS=24
 
 REPAIR_TARGET_LOG=target-service/logs
@@ -321,13 +330,13 @@ cd D:\java_web_project\agent-aiOps
 mvn -pl agent-platform spring-boot:run
 ```
 
-如果使用 OpenAI 兼容的 DashScope/Qwen 接口，`application-local.yml` 中保持：
+如果使用 OpenAI-compatible 本地或演示 provider，`application-local.yml` 中保持：
 
 ```yaml
 openai:
   api-key: "你的 key"
-  model: qwen3.6-plus
-  base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: deepseek-v4-flash
+  base-url: "你的 OpenAI-compatible /v1 endpoint"
 
 repair:
   llm:
@@ -426,6 +435,11 @@ mvn -pl target-service spring-boot:run
 
 # 终端 2
 mvn -pl agent-platform spring-boot:run
+
+# 终端 3：注入故障
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
+
+# 重启终端 1 的 target-service，让源码故障生效
 
 # 终端 3：触发 bug
 Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"

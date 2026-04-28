@@ -31,14 +31,14 @@ The target service keeps the normal application log at `target-service/logs/targ
 
 The backend loop is now LangChain4j Agentic-only. A Supervisor coordinates AI agents for diagnosis, planning, and patch proposal plus non-AI agents for evidence collection, patch application, tests, review, commit, PR, notification, reflection, and repair records.
 
-The Agentic flow has been verified end to end on the `quantity-division-by-zero` demo fault: it read a standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, ran `mvn -pl target-service test`, passed review, skipped disabled GitHub/Feishu actions safely, and wrote a repair record. There is no non-Agentic fallback; model configuration or model JSON failures surface as repair `ERROR` events.
+The Agentic flow has been verified end to end on the `quantity-division-by-zero` demo fault: it read a standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, ran `mvn -pl target-service test`, passed review, skipped disabled GitHub/Feishu actions safely, and wrote a repair record. A recent local run with `deepseek-v4-flash` completed the full repair loop in about 93 seconds. There is no non-Agentic fallback; model configuration or model JSON failures surface as repair `ERROR` events.
 
 ## Current Implementation Status
 
-- Done: structured evidence, repair plan, patch proposal, controlled patch application, tests, review gates, repair records, repair timing observability, demo fault injection, OpenAI-compatible/Qwen configuration, and LangChain4j Agentic orchestration.
+- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, LangChain4j `@Description` field hints, controlled patch application, tests, review gates, repair records, repair timing observability, demo fault injection, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration, and LangChain4j Agentic orchestration.
 - Done: Agentic implementation split into `repair/agentic`, `repair/agentic/agents`, and `repair/agentic/operators` so the runner only assembles the supervisor.
 - Still intentionally disabled by default: Git commit/push, GitHub PR creation, and Feishu notification.
-- Next: broaden repair scenarios beyond the first validation bug, add more Agentic-level tests, improve repair record retrieval/knowledge reuse, and add a frontend workbench after the backend flow stays stable.
+- Next: broaden repair scenarios beyond the first validation bug, add controlled retry/revision after review or test failure, add more Agentic-level tests, improve repair record retrieval/knowledge reuse, and add a frontend workbench after the backend flow stays stable.
 
 The current mainline target service is repaired. Use the demo fault injection endpoints to switch it into a known failure state before testing automatic repair.
 
@@ -65,7 +65,8 @@ LangChain4j is used for Agentic model reasoning and orchestration, not for unres
 
 - `RepairChatModelProvider`: lazily builds the configured OpenAI or DashScope `ChatModel`.
 - `AgenticRepairRunner`: builds the LangChain4j Agentic Supervisor; implementation details are split under `repair/agentic/agents` and `repair/agentic/operators`.
-- `StructuredJsonParser`: extracts and rejects invalid model JSON.
+- `AgenticDiagnosisAgent`, `AgenticPlanAgent`, and `AgenticPatchAgent`: return typed records with LangChain4j `@Description` annotations.
+- `RepairChatModelProvider`: supports role-specific model overrides. Use the strongest model first for `repairSupervisor`, then `AgenticPatchAgent`; `AgenticDiagnosisAgent` and `AgenticPlanAgent` can usually use the default model unless the incident is ambiguous.
 - `PatchTools` and `ToolPolicy`: remain the only controlled file-write path.
 - Agentic AI agents only receive read-only `@Tool` methods; patching, Git, GitHub, and Feishu are non-AI agents guarded by existing policies and disabled-mode config.
 
@@ -87,7 +88,7 @@ mvn -pl target-service spring-boot:run
 mvn -pl agent-platform spring-boot:run
 ```
 
-Trigger the demo bug:
+After injecting a demo fault and restarting `target-service`, trigger the demo bug:
 
 ```powershell
 Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
@@ -122,6 +123,10 @@ REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_MAX_TOKENS=4096
 REPAIR_LLM_TIMEOUT_SECONDS=90
 REPAIR_LLM_MAX_RETRIES=1
+REPAIR_LLM_SUPERVISOR_MODEL=
+REPAIR_LLM_PATCH_MODEL=
+REPAIR_LLM_DIAGNOSIS_MODEL=
+REPAIR_LLM_PLAN_MODEL=
 REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS=24
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
@@ -132,7 +137,7 @@ FEISHU_ENABLED=false
 FEISHU_WEBHOOK_URL=
 ```
 
-For repair runs, `REPAIR_LLM_ENABLED=true` and either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY` are required. If the model is unavailable or returns invalid `RepairPlan`/`PatchProposal` JSON, the workflow publishes an `ERROR` event instead of using a deterministic fallback. For OpenAI-compatible Qwen endpoints, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For more complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher so patch JSON is not truncated. The Agentic path trims traceback, source context, and SSE tool events before sending them through the supervisor.
+For repair runs, `REPAIR_LLM_ENABLED=true` and either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY` are required. If the model is unavailable or returns invalid typed `DiagnosisResult`/`RepairPlan`/`PatchProposal` objects, the workflow publishes an `ERROR` event instead of using a deterministic fallback. For OpenAI-compatible endpoints such as DeepSeek or Qwen, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher. The Agentic path trims traceback, source context, and SSE tool events before sending them through the supervisor. Agentic orchestration is model-sensitive: models that follow structured tool/agent invocation formats more reliably are preferred for demos. The highest-value role-specific override is usually `REPAIR_LLM_SUPERVISOR_MODEL`, followed by `REPAIR_LLM_PATCH_MODEL`.
 
 ## Local Profile
 
@@ -163,6 +168,15 @@ repair:
     provider: openai
 ```
 
+For an OpenAI-compatible local/demo provider, set the compatible base URL and model in `application-local.yml`, for example:
+
+```yaml
+openai:
+  api-key: "your provider key"
+  model: deepseek-v4-flash
+  base-url: "your OpenAI-compatible /v1 endpoint"
+```
+
 ## Demo Fault Injection
 
 The Agent platform can inject local demo faults into fixed target-service source files:
@@ -172,6 +186,8 @@ Invoke-RestMethod -Uri "http://localhost:9901/api/demo/faults"
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
 ```
+
+Fault injection edits source files only. Restart `target-service` after injecting or resetting a fault so the running Spring Boot process loads the changed code.
 
 Supported fault types:
 

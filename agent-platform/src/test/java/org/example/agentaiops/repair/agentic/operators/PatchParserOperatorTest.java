@@ -3,10 +3,10 @@ package org.example.agentaiops.repair.agentic.operators;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
-import org.example.agentaiops.llm.StructuredJsonParser;
+import java.util.List;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
+import org.example.agentaiops.repair.model.PatchOperation;
 import org.example.agentaiops.repair.model.PatchProposal;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.junit.jupiter.api.Test;
@@ -14,44 +14,27 @@ import org.junit.jupiter.api.Test;
 class PatchParserOperatorTest {
 
     @Test
-    void parsesValidPatchProposalJson() {
+    void validatesTypedPatchProposal() {
         AgenticRepairState state = new AgenticRepairState("session-001", Instant.now());
         PatchParserOperator operator = new PatchParserOperator(
                 state,
-                new StructuredJsonParser(new ObjectMapper()),
                 new RepairEventHub());
-        String patchJson = """
-                {
-                  "repairTarget": "OrderService.calculateUnitPrice",
-                  "rootCause": "quantity is not validated before division",
-                  "operations": [
-                    {
-                      "filePath": "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
-                      "oldText": "return totalCents / quantity;",
-                      "newText": "if (quantity <= 0) { throw new IllegalArgumentException(\\"quantity\\"); }\\nreturn totalCents / quantity;",
-                      "reason": "Reject invalid quantities before division"
-                    }
-                  ],
-                  "testsToRun": ["mvn -pl target-service test"]
-                }
-                """;
+        PatchProposal typedProposal = validProposal();
 
-        PatchProposal proposal = operator.parsePatchProposal(patchJson);
+        PatchProposal proposal = operator.parsePatchProposal(typedProposal);
 
         assertThat(proposal.modelGenerated()).isTrue();
-        assertThat(proposal.rawModelOutput()).isEqualTo(patchJson);
         assertThat(proposal.operations()).hasSize(1);
         assertThat(state.patchProposal).isSameAs(proposal);
     }
 
     @Test
-    void rejectsInvalidPatchProposalJson() {
+    void rejectsNullPatchProposal() {
         PatchParserOperator operator = new PatchParserOperator(
                 new AgenticRepairState("session-001", Instant.now()),
-                new StructuredJsonParser(new ObjectMapper()),
                 new RepairEventHub());
 
-        assertThatThrownBy(() -> operator.parsePatchProposal("not json"))
+        assertThatThrownBy(() -> operator.parsePatchProposal(null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("PatchProposal");
     }
@@ -60,18 +43,31 @@ class PatchParserOperatorTest {
     void rejectsPatchProposalWithoutOperations() {
         PatchParserOperator operator = new PatchParserOperator(
                 new AgenticRepairState("session-001", Instant.now()),
-                new StructuredJsonParser(new ObjectMapper()),
                 new RepairEventHub());
 
-        assertThatThrownBy(() -> operator.parsePatchProposal("""
-                {
-                  "repairTarget": "OrderService.calculateUnitPrice",
-                  "rootCause": "quantity is not validated before division",
-                  "operations": [],
-                  "testsToRun": ["mvn -pl target-service test"]
-                }
-                """))
+        assertThatThrownBy(() -> operator.parsePatchProposal(new PatchProposal(
+                "OrderService.calculateUnitPrice",
+                "quantity is not validated before division",
+                List.of(),
+                List.of("mvn -pl target-service test"),
+                true,
+                "")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("patch operations");
+    }
+
+    private PatchProposal validProposal() {
+        return new PatchProposal(
+                "OrderService.calculateUnitPrice",
+                "quantity is not validated before division",
+                List.of(new PatchOperation(
+                        "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
+                        "return totalCents / quantity;",
+                        "if (quantity <= 0) { throw new IllegalArgumentException(\"quantity\"); }\n"
+                                + "return totalCents / quantity;",
+                        "Reject invalid quantities before division")),
+                List.of("mvn -pl target-service test"),
+                true,
+                "");
     }
 }

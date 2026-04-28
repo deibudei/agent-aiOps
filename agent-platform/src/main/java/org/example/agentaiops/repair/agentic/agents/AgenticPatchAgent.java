@@ -4,12 +4,14 @@ import dev.langchain4j.agentic.Agent;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
+import org.example.agentaiops.repair.model.PatchProposal;
+import org.example.agentaiops.repair.model.RepairPlan;
 
-/** AI sub-agent that emits strict JSON patch proposals. */
+/** AI sub-agent that emits structured patch proposals. */
 public interface AgenticPatchAgent {
 
-    @Agent(name = "generatePatchProposal", description = "Generate strict JSON PatchProposal",
-            outputKey = "patchJson")
+    @Agent(name = "generatePatchProposal", description = "Generate typed PatchProposal",
+            outputKey = "patchProposal")
     @SystemMessage("""
             Assume the role of a careful Java Spring Boot patch author.
             You are responsible for producing a minimal, exact, machine-applicable patch proposal.
@@ -22,9 +24,9 @@ public interface AgenticPatchAgent {
             - Keep each replacement method-level or smaller when possible.
             - Include tests only when source context shows the expected regression surface.
             - Do not invent files or modify agent-platform, root configs, secrets, scripts, or build files.
-            - Return only strict JSON; no markdown, comments, or prose outside the JSON.
+            - Return only the structured PatchProposal object; no markdown, comments, or prose.
 
-            Return only strict JSON matching:
+            PatchProposal shape:
             {
               "repairTarget": "same target as the plan",
               "rootCause": "specific root cause",
@@ -40,17 +42,60 @@ public interface AgenticPatchAgent {
               "modelGenerated": true,
               "rawModelOutput": ""
             }
+
+            Few-shot example 1:
+            Repair plan: target is OrderService.calculateUnitPrice quantity validation.
+            Source context contains:
+            public int calculateUnitPrice(int totalCents, int quantity) {
+                return totalCents / quantity;
+            }
+            PatchProposal:
+            {
+              "repairTarget": "OrderService.calculateUnitPrice quantity validation",
+              "rootCause": "quantity is divided before positive-boundary validation",
+              "operations": [
+                {
+                  "filePath": "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
+                  "oldText": "    /** Calculates unit price without guarding invalid quantities. */\\n    public int calculateUnitPrice(int totalCents, int quantity) {\\n        return totalCents / quantity;\\n    }",
+                  "newText": "    /** Calculates unit price, rejecting non-positive quantities. */\\n    public int calculateUnitPrice(int totalCents, int quantity) {\\n        if (quantity <= 0) {\\n            throw new IllegalArgumentException(\\"quantity must be positive\\");\\n        }\\n        return totalCents / quantity;\\n    }",
+                  "reason": "Rejects zero or negative quantity before integer division."
+                }
+              ],
+              "testsToRun": ["mvn -pl target-service test"],
+              "modelGenerated": true,
+              "rawModelOutput": ""
+            }
+
+            Few-shot example 2:
+            Repair plan: restore OrderController quote route.
+            Source context contains @GetMapping("/api/orders/quotation") above quote(...).
+            PatchProposal:
+            {
+              "repairTarget": "OrderController quote route mapping",
+              "rootCause": "quote route mapping drifted from /api/orders/quote",
+              "operations": [
+                {
+                  "filePath": "target-service/src/main/java/com/example/targetservice/controller/OrderController.java",
+                  "oldText": "    @GetMapping(\\"/api/orders/quotation\\")",
+                  "newText": "    @GetMapping(\\"/api/orders/quote\\")",
+                  "reason": "Restores the public endpoint expected by tests and callers."
+                }
+              ],
+              "testsToRun": ["mvn -pl target-service test"],
+              "modelGenerated": true,
+              "rawModelOutput": ""
+            }
             """)
     @UserMessage("""
-            Repair plan JSON:
-            {{planJson}}
+            Repair plan:
+            {{plan}}
 
             Source context:
             {{sourceContext}}
 
-            Generate the minimal safe patch proposal JSON.
+            Generate the minimal safe PatchProposal.
             """)
-    String generatePatchProposal(
-            @V("planJson") String planJson,
+    PatchProposal generatePatchProposal(
+            @V("plan") RepairPlan plan,
             @V("sourceContext") String sourceContext);
 }
