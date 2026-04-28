@@ -15,7 +15,7 @@ import org.example.agentaiops.repair.service.RepairEventHub;
 /** Bridges LangChain4j Agentic events into the repair SSE stream. */
 public final class RepairAgenticListener implements AgentListener {
 
-    private static final Set<String> TIMING_EXCLUDED_AGENTS = Set.of("repairSupervisor", "writeRepairRecord");
+    private static final Set<String> TIMING_EXCLUDED_AGENTS = Set.of();
 
     private final AgenticRepairState state;
     private final String sessionId;

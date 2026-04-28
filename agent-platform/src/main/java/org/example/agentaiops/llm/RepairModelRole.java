@@ -1,8 +1,7 @@
 package org.example.agentaiops.llm;
 
-/** Logical model roles used by the agentic repair workflow. */
+/** Logical model roles used by the deterministic Java repair DAG. */
 public enum RepairModelRole {
-    SUPERVISOR,
     DIAGNOSIS,
     PLAN,
     PATCH

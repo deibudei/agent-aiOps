@@ -1,7 +1,5 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
-import dev.langchain4j.service.V;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.PatchOperation;
 import org.example.agentaiops.repair.model.PatchProposal;
@@ -19,9 +17,7 @@ public final class PatchParserOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "parsePatchProposal", description = "Validate typed PatchProposal",
-            outputKey = "patchProposal")
-    public PatchProposal parsePatchProposal(@V("patchProposal") PatchProposal proposal) {
+    public PatchProposal parsePatchProposal(PatchProposal proposal) {
         validate(proposal);
         state.patchProposal = new PatchProposal(
                 proposal.repairTarget(),

@@ -1,7 +1,5 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
-import dev.langchain4j.service.V;
 import java.util.List;
 import java.util.Map;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
@@ -22,8 +20,7 @@ public final class PlanParserOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "parseRepairPlan", description = "Validate typed RepairPlan", outputKey = "plan")
-    public RepairPlan parseRepairPlan(@V("plan") RepairPlan plan) {
+    public RepairPlan parseRepairPlan(RepairPlan plan) {
         validate(plan);
         state.plan = plan;
         state.step("PlanParser", "plan", "RepairPlan validated", true);

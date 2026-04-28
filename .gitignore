@@ -1,6 +1,7 @@
 target/
 !.mvn/wrapper/maven-wrapper.jar
 *.log
+*.err
 logs/
 repair-records/
 server.pid

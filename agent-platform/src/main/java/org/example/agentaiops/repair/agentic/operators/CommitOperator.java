@@ -1,12 +1,9 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
-import dev.langchain4j.service.V;
 import java.util.Map;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.GitCommitResult;
 import org.example.agentaiops.repair.model.RepairStage;
-import org.example.agentaiops.repair.model.ReviewDecision;
 import org.example.agentaiops.repair.model.ReviewStatus;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.tool.GitTools;
@@ -24,15 +21,16 @@ public final class CommitOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "commitRepair", description = "Create repair branch and commit when review passes",
-            outputKey = "gitCommitMessage")
-    public String commitRepair(@V("reviewDecision") ReviewDecision reviewDecision) {
-        if (reviewDecision.status() != ReviewStatus.PASS) {
+    public String commitRepair() {
+        if (state.reviewDecision == null || state.reviewDecision.status() != ReviewStatus.PASS) {
             state.gitCommitResult = new GitCommitResult(false, "", "", "Review did not pass");
             return state.gitCommitResult.message();
         }
+        String repairTarget = state.plan == null || state.plan.repairTarget() == null
+                ? "target-service repair"
+                : state.plan.repairTarget();
         eventHub.publish(state.sessionId, RepairStage.COMMITTING, "Creating repair branch and commit");
-        state.gitCommitResult = gitTools.commitAndPush(state.sessionId);
+        state.gitCommitResult = gitTools.commitAndPush(state.sessionId, repairTarget);
         state.step("GitTools", state.sessionId, state.gitCommitResult.message(), state.gitCommitResult.success());
         eventHub.publish(state.sessionId, RepairStage.COMMITTING, state.gitCommitResult.message(),
                 Map.of("git", state.gitCommitResult));

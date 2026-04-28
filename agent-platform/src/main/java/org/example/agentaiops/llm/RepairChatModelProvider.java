@@ -125,7 +125,6 @@ public class RepairChatModelProvider {
     /** Applies role-specific model overrides while falling back to the provider default model. */
     private String roleModelOverride(RepairModelRole role, String defaultModel) {
         String override = switch (role) {
-            case SUPERVISOR -> properties.getLlm().getSupervisorModel();
             case DIAGNOSIS -> properties.getLlm().getDiagnosisModel();
             case PLAN -> properties.getLlm().getPlanModel();
             case PATCH -> properties.getLlm().getPatchModel();

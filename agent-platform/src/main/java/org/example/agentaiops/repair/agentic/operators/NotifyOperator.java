@@ -1,9 +1,7 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
 import java.util.Map;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
-import org.example.agentaiops.repair.model.NotificationResult;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.tool.FeishuTools;
@@ -21,15 +19,24 @@ public final class NotifyOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "sendNotification", description = "Send Feishu notification after PR step",
-            outputKey = "notificationMessage")
     public String sendNotification() {
         eventHub.publish(state.sessionId, RepairStage.NOTIFIED, "Sending Feishu notification");
+        String repairTarget = state.plan == null || state.plan.repairTarget() == null
+                ? "target-service repair"
+                : state.plan.repairTarget();
+        String rootCause = state.plan == null || state.plan.rootCauseHypothesis() == null
+                ? ""
+                : state.plan.rootCauseHypothesis();
+        String reviewReason = state.reviewDecision == null || state.reviewDecision.reason() == null
+                ? ""
+                : state.reviewDecision.reason();
         state.notificationResult = feishuTools.sendRepairCard(
                 state.sessionId,
+                repairTarget,
+                rootCause,
+                reviewReason,
                 state.pullRequestResult,
-                state.plan.rootCauseHypothesis(),
-                state.reviewDecision.reason());
+                state.timing());
         state.step("FeishuTools", state.sessionId, state.notificationResult.message(),
                 state.notificationResult.success());
         eventHub.publish(state.sessionId, RepairStage.NOTIFIED, state.notificationResult.message(),

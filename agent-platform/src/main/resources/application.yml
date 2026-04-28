@@ -29,16 +29,23 @@ repair:
     test-command: ${REPAIR_TEST_COMMAND:mvn -pl target-service test}
   workflow:
     max-repair-attempts: ${REPAIR_MAX_ATTEMPTS:3}
+    max-patch-attempts: ${REPAIR_MAX_PATCH_ATTEMPTS:2}
     process-timeout-seconds: ${REPAIR_PROCESS_TIMEOUT_SECONDS:120}
   git:
     enabled: ${REPAIR_GIT_ENABLED:false}
     remote: ${REPAIR_GIT_REMOTE:origin}
-    base-branch: ${REPAIR_BASE_BRANCH:main}
+    base-branch: ${REPAIR_BASE_BRANCH:repair-demo-target}
   github:
-    enabled: ${REPAIR_GITHUB_ENABLED:false}
+    enabled: ${REPAIR_GITHUB_ENABLED:true}
+    client: ${REPAIR_GITHUB_CLIENT:rest}
+    token: ${GITHUB_TOKEN:}
+    owner: ${REPAIR_GITHUB_OWNER:}
+    repo: ${REPAIR_GITHUB_REPO:}
+    api-base-url: ${REPAIR_GITHUB_API_BASE_URL:https://api.github.com}
   feishu:
-    enabled: ${FEISHU_ENABLED:false}
+    enabled: ${FEISHU_ENABLED:true}
     webhook-url: ${FEISHU_WEBHOOK_URL:}
+    signing-secret: ${FEISHU_SIGNING_SECRET:}
   llm:
     enabled: ${REPAIR_LLM_ENABLED:true}
     provider: ${REPAIR_LLM_PROVIDER:openai}
@@ -47,4 +54,4 @@ repair:
     timeout-seconds: ${REPAIR_LLM_TIMEOUT_SECONDS:180}
     max-retries: ${REPAIR_LLM_MAX_RETRIES:1}
   agentic:
-    max-supervisor-invocations: ${REPAIR_AGENTIC_MAX_SUPERVISOR_INVOCATIONS:24}
+    file-read-cache-enabled: ${REPAIR_AGENTIC_FILE_READ_CACHE_ENABLED:true}

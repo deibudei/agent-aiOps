@@ -36,17 +36,17 @@ public class RepairWorkflowService {
         return new RepairRunResponse(sessionId, "started", "/api/repair/stream/" + sessionId);
     }
 
-    /** Runs one LangChain4j Agentic repair session, failing fast when model config is unavailable. */
+    /** Runs one LangChain4j-backed repair DAG, failing fast when model config is unavailable. */
     private void run(String sessionId) {
         Instant startedAt = Instant.now();
         try {
             if (!agenticRepairRunner.available()) {
                 eventHub.publish(sessionId, RepairStage.ERROR,
-                        "LangChain4j agentic repair requires REPAIR_LLM_ENABLED=true and a configured provider API key");
+                        "Repair requires REPAIR_LLM_ENABLED=true and a configured provider API key");
                 return;
             }
             eventHub.publish(sessionId, RepairStage.EXECUTING,
-                    "LangChain4j agentic supervisor is enabled");
+                    "Deterministic repair DAG is enabled");
             agenticRepairRunner.run(sessionId, startedAt);
         } catch (Exception e) {
             eventHub.publish(sessionId, RepairStage.ERROR, "Repair workflow failed: " + describe(e));

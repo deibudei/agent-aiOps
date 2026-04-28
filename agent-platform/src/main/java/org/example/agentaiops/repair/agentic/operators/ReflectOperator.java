@@ -1,6 +1,5 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
 import java.util.Map;
 import org.example.agentaiops.repair.agent.RepairReflectionAgent;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
@@ -21,7 +20,6 @@ public final class ReflectOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "reflectRepair", description = "Generate repair reflection", outputKey = "reflectionSummary")
     public String reflectRepair() {
         eventHub.publish(state.sessionId, RepairStage.REFLECTING, "Generating repair reflection");
         state.reflection = reflectionAgent.reflect(

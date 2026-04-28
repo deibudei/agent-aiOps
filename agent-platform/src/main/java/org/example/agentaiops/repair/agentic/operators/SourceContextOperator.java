@@ -1,7 +1,5 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
-import dev.langchain4j.service.V;
 import org.example.agentaiops.repair.agentic.AgenticEvidenceFormatter;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.RepairPlan;
@@ -15,9 +13,7 @@ public final class SourceContextOperator {
         this.state = state;
     }
 
-    @Agent(name = "prepareSourceContext", description = "Prepare selected source snippets for patch generation",
-            outputKey = "sourceContext")
-    public String prepareSourceContext(@V("evidence") String evidence, @V("plan") RepairPlan plan) {
+    public String prepareSourceContext(String evidence, RepairPlan plan) {
         if (state.plan == null) {
             state.plan = plan;
         }

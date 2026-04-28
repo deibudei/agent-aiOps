@@ -1,6 +1,5 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -13,7 +12,7 @@ import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.tool.GitTools;
 import org.example.agentaiops.repair.tool.RepairRecordTools;
 
-/** Persists the final repair record after reflection. */
+/** Persists the final repair record after reflection (single write). */
 public final class RecordOperator {
 
     private final AgenticRepairState state;
@@ -29,33 +28,27 @@ public final class RecordOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "writeRepairRecord", description = "Persist repair record JSON", outputKey = "recordVersion")
     public Integer writeRepairRecord() {
         if (state.evidenceBundle == null || state.plan == null
                 || state.testResult == null || state.reviewDecision == null || state.reflection == null) {
-            throw new IllegalStateException("Agentic repair state is incomplete");
+            throw new IllegalStateException("Repair state is incomplete: evidence/plan/test/review/reflection required");
         }
         state.beginTiming("writeRepairRecord");
         RepairRecord record;
         try {
             record = buildRecord();
-            ToolExecutionResult firstWrite = repairRecordTools.writeRecord(record);
-            if (!firstWrite.success()) {
-                throw new IllegalStateException(firstWrite.error());
+            ToolExecutionResult write = repairRecordTools.writeRecord(record);
+            if (!write.success()) {
+                throw new IllegalStateException(write.error());
             }
-            state.endTiming("writeRepairRecord", true, firstWrite.output());
-            record = buildRecord();
-            ToolExecutionResult finalWrite = repairRecordTools.writeRecord(record);
-            if (!finalWrite.success()) {
-                throw new IllegalStateException(finalWrite.error());
-            }
+            state.endTiming("writeRepairRecord", true, write.output());
         } catch (RuntimeException e) {
             state.endTiming("writeRepairRecord", false, e.getMessage());
             throw e;
         }
         state.recordWritten = true;
         eventHub.publish(state.sessionId, RepairStage.REFLECTING,
-                "Agentic repair record written",
+                "Repair record written",
                 Map.of(
                         "recordVersion", record.recordVersion(),
                         "stepName", "writeRepairRecord",
@@ -63,21 +56,10 @@ public final class RecordOperator {
         return record.recordVersion();
     }
 
-    /** Rewrites the final record after the supervisor itself has emitted model usage. */
-    public void rewriteFinalRecord() {
-        if (!state.recordWritten) {
-            writeRepairRecord();
-            return;
-        }
-        RepairRecord record = buildRecord();
-        ToolExecutionResult result = repairRecordTools.writeRecord(record);
-        if (!result.success()) {
-            throw new IllegalStateException(result.error());
-        }
-    }
-
     private RepairRecord buildRecord() {
-        state.diff = gitTools.readTargetDiff();
+        if (state.diff == null) {
+            state.diff = gitTools.readTargetDiff();
+        }
         return new RepairRecord(
                 1,
                 state.sessionId,

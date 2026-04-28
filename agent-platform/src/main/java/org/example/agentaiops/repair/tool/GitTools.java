@@ -61,14 +61,32 @@ public class GitTools {
     }
 
     /** Creates a repair branch, commits target-service changes, and pushes it when enabled. */
-    public GitCommitResult commitAndPush(String sessionId) {
+    public GitCommitResult commitAndPush(String sessionId, String repairTarget) {
         if (!properties.getGit().isEnabled()) {
             return new GitCommitResult(true, "", "", "Git is disabled; skipped commit and push");
         }
 
         String branchName = "repair/" + sanitize(sessionId);
-        String commitMessage = "fix: auto repair target-service validation";
+        String safeTarget = repairTarget == null || repairTarget.isBlank() ? "target-service repair" : repairTarget;
+        String commitMessage = "fix(repair): " + safeTarget;
+        String baseBranch = properties.getGit().getBaseBranch();
         List<String> failures = new ArrayList<>();
+
+        if (hasText(baseBranch)) {
+            CommandResult fetch = runGit("fetch", properties.getGit().getRemote(), baseBranch);
+            if (!fetch.success()) {
+                failures.add(fetch.output());
+            }
+            CommandResult checkoutBase = runGit("checkout", baseBranch);
+            if (!checkoutBase.success()) {
+                CommandResult checkoutFromRemote = runGit(
+                        "checkout", "-B", baseBranch, properties.getGit().getRemote() + "/" + baseBranch);
+                if (!checkoutFromRemote.success()) {
+                    failures.add(checkoutBase.output());
+                    failures.add(checkoutFromRemote.output());
+                }
+            }
+        }
 
         CommandResult checkout = runGit("checkout", "-b", branchName);
         if (!checkout.success()) {
@@ -95,6 +113,10 @@ public class GitTools {
         }
 
         return new GitCommitResult(true, branchName, commitMessage, "Branch pushed");
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /** Confirms every changed file stays inside the write whitelist. */

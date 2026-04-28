@@ -19,6 +19,17 @@ public class ReadCodeTools {
         this.toolPolicy = toolPolicy;
     }
 
+    /** Returns last-modified millis for one whitelisted source or log file. */
+    public ToolExecutionResult lastModifiedMillis(String path) {
+        try {
+            Path resolved = toolPolicy.resolveForRead(path);
+            long millis = Files.getLastModifiedTime(resolved).toMillis();
+            return ToolExecutionResult.success(String.valueOf(millis));
+        } catch (IOException | IllegalArgumentException e) {
+            return ToolExecutionResult.failure(e.getMessage());
+        }
+    }
+
     /** Reads one whitelisted source or log file. */
     public ToolExecutionResult readFile(String path) {
         try {

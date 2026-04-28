@@ -1,6 +1,5 @@
 package org.example.agentaiops.repair.agentic.operators;
 
-import dev.langchain4j.agentic.Agent;
 import java.util.Map;
 import org.example.agentaiops.repair.agent.EvidenceAgent;
 import org.example.agentaiops.repair.agentic.AgenticEvidenceFormatter;
@@ -21,11 +20,9 @@ public final class EvidenceOperator {
         this.eventHub = eventHub;
     }
 
-    @Agent(name = "collectEvidence", description = "Collect traceback, tests, and source snippets",
-            outputKey = "evidence")
     public String collectEvidence() {
         eventHub.publish(state.sessionId, RepairStage.DETECTING,
-                "Agentic EvidenceAgent collecting traceback, tests, and source evidence");
+                "EvidenceAgent collecting traceback, tests, and source evidence");
         state.evidenceBundle = evidenceAgent.collect();
         state.evidence = AgenticEvidenceFormatter.compactEvidence(state.evidenceBundle);
         state.step("EvidenceAgent", "collect", state.evidenceBundle.summary(), true);

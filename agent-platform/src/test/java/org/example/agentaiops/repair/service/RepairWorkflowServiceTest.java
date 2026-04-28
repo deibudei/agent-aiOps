@@ -48,7 +48,7 @@ class RepairWorkflowServiceTest {
 
         verify(eventHub).publish("session-002", RepairStage.DETECTING, "Repair workflow accepted");
         verify(eventHub).publish("session-002", RepairStage.EXECUTING,
-                "LangChain4j agentic supervisor is enabled");
+                "Deterministic repair DAG is enabled");
         verify(eventHub).publish(
                 eq("session-002"),
                 eq(RepairStage.ERROR),

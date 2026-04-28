@@ -143,6 +143,7 @@ public class RepairProperties {
 
     public static class Workflow {
         private int maxRepairAttempts = 3;
+        private int maxPatchAttempts = 2;
         private int processTimeoutSeconds = 120;
 
         /** Returns how many times a repair may retry tests. */
@@ -153,6 +154,16 @@ public class RepairProperties {
         /** Updates how many times a repair may retry tests. */
         public void setMaxRepairAttempts(int maxRepairAttempts) {
             this.maxRepairAttempts = maxRepairAttempts;
+        }
+
+        /** Returns how many times the patch agent may regenerate after failing tests. */
+        public int getMaxPatchAttempts() {
+            return maxPatchAttempts;
+        }
+
+        /** Updates how many times the patch agent may regenerate after failing tests. */
+        public void setMaxPatchAttempts(int maxPatchAttempts) {
+            this.maxPatchAttempts = maxPatchAttempts;
         }
 
         /** Returns the external process timeout in seconds. */
@@ -204,6 +215,11 @@ public class RepairProperties {
 
     public static class Github {
         private boolean enabled;
+        private String client = "rest";
+        private String token = "";
+        private String owner = "";
+        private String repo = "";
+        private String apiBaseUrl = "https://api.github.com";
 
         /** Returns whether GitHub PR creation is enabled. */
         public boolean isEnabled() {
@@ -214,11 +230,62 @@ public class RepairProperties {
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
         }
+
+        /** Returns rest or cli; rest uses the GitHub REST API and cli falls back to gh CLI. */
+        public String getClient() {
+            return client;
+        }
+
+        /** Updates the GitHub client implementation. */
+        public void setClient(String client) {
+            this.client = client;
+        }
+
+        /** Returns the GitHub personal access token used for REST authentication. */
+        public String getToken() {
+            return token;
+        }
+
+        /** Updates the GitHub personal access token used for REST authentication. */
+        public void setToken(String token) {
+            this.token = token;
+        }
+
+        /** Returns the optional repository owner override. Empty string means auto-detect from git remote. */
+        public String getOwner() {
+            return owner;
+        }
+
+        /** Updates the optional repository owner override. */
+        public void setOwner(String owner) {
+            this.owner = owner;
+        }
+
+        /** Returns the optional repository name override. Empty string means auto-detect from git remote. */
+        public String getRepo() {
+            return repo;
+        }
+
+        /** Updates the optional repository name override. */
+        public void setRepo(String repo) {
+            this.repo = repo;
+        }
+
+        /** Returns the GitHub REST API base URL. Override for GitHub Enterprise. */
+        public String getApiBaseUrl() {
+            return apiBaseUrl;
+        }
+
+        /** Updates the GitHub REST API base URL. */
+        public void setApiBaseUrl(String apiBaseUrl) {
+            this.apiBaseUrl = apiBaseUrl;
+        }
     }
 
     public static class Feishu {
         private boolean enabled;
         private String webhookUrl = "";
+        private String signingSecret = "";
 
         /** Returns whether Feishu notification is enabled. */
         public boolean isEnabled() {
@@ -239,6 +306,16 @@ public class RepairProperties {
         public void setWebhookUrl(String webhookUrl) {
             this.webhookUrl = webhookUrl;
         }
+
+        /** Returns the optional Feishu signing secret used for webhook signature verification. */
+        public String getSigningSecret() {
+            return signingSecret;
+        }
+
+        /** Updates the optional Feishu signing secret used for webhook signature verification. */
+        public void setSigningSecret(String signingSecret) {
+            this.signingSecret = signingSecret;
+        }
     }
 
     public static class Llm {
@@ -248,7 +325,6 @@ public class RepairProperties {
         private int maxTokens = 2048;
         private int timeoutSeconds = 90;
         private int maxRetries = 1;
-        private String supervisorModel = "";
         private String diagnosisModel = "";
         private String planModel = "";
         private String patchModel = "";
@@ -313,16 +389,6 @@ public class RepairProperties {
             this.maxRetries = maxRetries;
         }
 
-        /** Returns the optional model override for the Agentic supervisor. */
-        public String getSupervisorModel() {
-            return supervisorModel;
-        }
-
-        /** Updates the optional model override for the Agentic supervisor. */
-        public void setSupervisorModel(String supervisorModel) {
-            this.supervisorModel = supervisorModel;
-        }
-
         /** Returns the optional model override for diagnosis. */
         public String getDiagnosisModel() {
             return diagnosisModel;
@@ -355,16 +421,16 @@ public class RepairProperties {
     }
 
     public static class Agentic {
-        private int maxSupervisorInvocations = 24;
+        private boolean fileReadCacheEnabled = true;
 
-        /** Returns the maximum number of sub-agent calls the supervisor may make. */
-        public int getMaxSupervisorInvocations() {
-            return maxSupervisorInvocations;
+        /** Returns whether Agentic readFile results are cached within one repair session. */
+        public boolean isFileReadCacheEnabled() {
+            return fileReadCacheEnabled;
         }
 
-        /** Updates the maximum number of sub-agent calls the supervisor may make. */
-        public void setMaxSupervisorInvocations(int maxSupervisorInvocations) {
-            this.maxSupervisorInvocations = maxSupervisorInvocations;
+        /** Updates whether Agentic readFile results are cached within one repair session. */
+        public void setFileReadCacheEnabled(boolean fileReadCacheEnabled) {
+            this.fileReadCacheEnabled = fileReadCacheEnabled;
         }
     }
 }

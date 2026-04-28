@@ -1,7 +1,9 @@
 package org.example.agentaiops.repair.agentic;
 
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import org.example.agentaiops.repair.model.EvidenceBundle;
@@ -28,6 +30,7 @@ public final class AgenticRepairState {
     public final Instant startedAt;
     public final List<RepairStepResult> steps = new ArrayList<>();
     private final RepairTimingCollector timingCollector;
+    private final Deque<List<PatchSnapshot>> rollbackSnapshots = new ArrayDeque<>();
     public EvidenceBundle evidenceBundle;
     public String evidence;
     public DiagnosisResult diagnosis;
@@ -45,6 +48,7 @@ public final class AgenticRepairState {
     public RepairReflection reflection;
     public String diff;
     public String supervisorSummary;
+    public int patchAttempts;
     public boolean recordWritten;
 
     public AgenticRepairState(String sessionId, Instant startedAt) {
@@ -96,5 +100,18 @@ public final class AgenticRepairState {
 
     public RepairTiming timing() {
         return timingCollector.snapshot();
+    }
+
+    /** Records a stack of file snapshots so the most recent apply can be rolled back. */
+    public synchronized void recordRollbackSnapshots(List<PatchSnapshot> snapshots) {
+        if (snapshots == null || snapshots.isEmpty()) {
+            return;
+        }
+        rollbackSnapshots.push(List.copyOf(snapshots));
+    }
+
+    /** Returns the most recent snapshot list and removes it from the rollback stack. */
+    public synchronized List<PatchSnapshot> popRollbackSnapshots() {
+        return rollbackSnapshots.isEmpty() ? null : rollbackSnapshots.pop();
     }
 }
