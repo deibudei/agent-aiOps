@@ -40,7 +40,7 @@
 - Reflexion：`repair.workflow.max-patch-attempts` 控制重写次数（默认 2）。一次补丁应用前会先快照原文件内容，测试失败后回滚到该快照再重新生成补丁，避免错叠多份补丁。
 - GitHub 集成：默认走 GitHub REST API（`repair.github.client=rest`），不依赖 `gh CLI`。Owner/Repo 优先读 `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO`，未配置时自动从 `git remote get-url origin` 解析 HTTPS/SSH URL。
 - 飞书 v2 卡片：成功修复和失败修复使用不同标题/文案，卡片内容包括根因摘要、Review 结论、PR 链接、总耗时、token 消耗（provider 返回 usage 时展示真实值，否则明确显示未返回/未采集，不再显示 0），并提供「查看 PR」按钮和会话 footer；如果配置 `FEISHU_SIGNING_SECRET`，请求体会带上 `timestamp` + `sign` 校验。
-- 已验证：`real-e2e-003` 在已提交故障的 `demo/fault/quantity-division-by-zero` base 分支上跑通完整比赛链路：读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review、push `repair/real-e2e-003`、创建 GitHub PR [#1](https://github.com/deibudei/agent-aiOps/pull/1)、发送飞书「已修复，请 Review」卡片，并写入 `repair-records/real-e2e-003.json` / `.md`，最终 `outcome=FIXED`。
+- 已验证：`e2e-token-2` 在已提交故障的 `demo/fault/quantity-division-by-zero` base 分支上跑通完整比赛链路：读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review、push `repair/e2e-token-2`、创建 GitHub PR [#2](https://github.com/deibudei/agent-aiOps/pull/2)、发送飞书「已修复，请 Review」卡片，并写入 `repair-records/e2e-token-2.json` / `.md`，最终 `outcome=FIXED`。本次耗时约 96.1 秒，并记录到真实模型用量：input 47031 / output 6073 / total 53104 tokens。
 - 当前限制：修复运行必须配置 `REPAIR_LLM_ENABLED=true` 和对应 provider API key；模型不可用或结构化输出连续两次非法会发布 `ERROR`，并写入最小错误记录，不再走确定性 fallback。写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
 
 ## 当前实现状态与下一步
@@ -56,7 +56,7 @@
 - 安全执行：`PatchTools + ToolPolicy` 是唯一写文件通道。
 - 审查门禁：路径越界、空 diff、测试失败、review 不通过都会阻断后续 commit/PR/飞书。
 - Agentic 编排：`AgenticRepairRunner` 负责装配并顺序调用 Java DAG，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
-- 修复耗时与 token 观测：`RepairTiming` 记录总耗时、每个 Java DAG 节点耗时、模型名称和 token 消耗，并写入 SSE、JSON 记录和 Markdown 记录。部分 OpenAI-compatible provider 不返回 token usage 时，记录中的 token 字段保持为空，飞书卡片明确显示 provider 未返回 token usage。
+- 修复耗时与 token 观测：`RepairTiming` 记录总耗时、每个 Java DAG 节点耗时、模型名称和 token 消耗；`ObservedChatModel` 在模型边界直接采集 `ChatResponse.tokenUsage()`，并写入 SSE、JSON 记录、Markdown 记录和飞书卡片。部分 OpenAI-compatible provider 不返回 token usage 时，记录中的 token 字段保持为空，飞书卡片明确显示 provider 未返回 token usage。
 - 演示故障：已提供 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 三类故障注入 API。
 - 修复结果：SSE completed 事件和修复记录写入 `outcome=FIXED|FAILED|ERROR` 与 `outcomeReason`。patch/test/review/PR 的受控失败是 `COMPLETED + FAILED`；系统异常是 `ERROR`，并写入最小错误记录。
 
@@ -116,7 +116,7 @@ git push --force-with-lease origin demo/fault/quantity-division-by-zero
 验收方式：
 
 - `mvn -pl agent-platform test`
-- 在 `demo/fault/quantity-division-by-zero` 上跑一次真实 E2E，确认 GitHub PR、飞书卡片、SSE、JSON 记录和 Markdown 记录里都能看到 `outcome=FIXED`。若模型 provider 返回 token usage，再确认 token 消耗被记录。
+- 最新验收：`e2e-token-2` 已在 `demo/fault/quantity-division-by-zero` 上确认 GitHub PR、飞书卡片、SSE、JSON 记录和 Markdown 记录都显示 `outcome=FIXED`，并记录到 provider 返回的真实 token 消耗。
 
 ## LangChain4j 集成说明
 

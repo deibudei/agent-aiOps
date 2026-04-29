@@ -43,7 +43,7 @@ The backend loop is now a deterministic Java DAG (`AgenticRepairRunner`) coordin
 
 If a patched run fails the target tests, `AgenticPatchAgent.regeneratePatchFromTestFailure` receives the test stderr and rewrites the patch; `PatchApplyOperator` rolls back to the pre-apply file snapshot before the new patch is applied. The number of attempts is bounded by `REPAIR_MAX_PATCH_ATTEMPTS` (default 2).
 
-The full competition loop has been verified end to end on the committed `demo/fault/quantity-division-by-zero` base branch. Latest real E2E session `real-e2e-003` read the standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, passed all 5 target-service tests, passed review, pushed `repair/real-e2e-003`, created [GitHub PR #1](https://github.com/deibudei/agent-aiOps/pull/1), sent the Feishu "fixed, please review" card, and wrote `repair-records/real-e2e-003.json` / `.md` with `outcome=FIXED`. There is no non-LLM fallback; model configuration or invalid typed model output surfaces as repair `ERROR` events and writes a minimal error record.
+The full competition loop has been verified end to end on the committed `demo/fault/quantity-division-by-zero` base branch. Latest real E2E session `e2e-token-2` read the standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, passed all 5 target-service tests, passed review, pushed `repair/e2e-token-2`, created [GitHub PR #2](https://github.com/deibudei/agent-aiOps/pull/2), sent the Feishu "fixed, please review" card, and wrote `repair-records/e2e-token-2.json` / `.md` with `outcome=FIXED`. The run took about 96.1 seconds and captured real model usage: 47,031 input tokens, 6,073 output tokens, and 53,104 total tokens. There is no non-LLM fallback; model configuration or invalid typed model output surfaces as repair `ERROR` events and writes a minimal error record.
 
 ## Current Implementation Status
 
@@ -100,7 +100,7 @@ Implemented behavior:
 Validation:
 
 - Run `mvn -pl agent-platform test`.
-- Run a real E2E session from `demo/fault/quantity-division-by-zero` and confirm the PR, Feishu card, SSE, JSON record, and Markdown record all show `outcome=FIXED`. Confirm token counts when the configured provider returns usage metadata.
+- Latest validation: `e2e-token-2` on `demo/fault/quantity-division-by-zero` confirmed GitHub PR, Feishu card, SSE completion payload, JSON record, and Markdown record all show `outcome=FIXED`, with real token counts from the configured providers.
 
 ## LangChain4j
 
