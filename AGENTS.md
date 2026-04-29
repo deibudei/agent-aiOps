@@ -44,14 +44,16 @@ Required demo loop:
 - Current Agent maturity: the workflow is a deterministic Java DAG (`AgenticRepairRunner`) that calls four LangChain4j AI sub-agents (`AgenticDiagnosisAgent`, `AgenticPlanAgent`, `AgenticPatchAgent`, `AgenticReflectionAgent`) for language tasks plus non-AI components for evidence, patch apply, tests, review, commit, PR, Feishu, and records. There is no `SupervisorAgent` or orchestration LLM call. Missing LLM configuration or invalid typed model output after one retry publishes a repair `ERROR` and writes a minimal error record. Current mainline `target-service` is in the repaired state.
 - Reflexion loop on test failure: `AgenticPatchAgent.regeneratePatchFromTestFailure` rewrites the patch using the failing test stderr; `PatchApplyOperator` snapshots target files before each apply and rolls them back between attempts. Bounded by `repair.workflow.max-patch-attempts` (env `REPAIR_MAX_PATCH_ATTEMPTS`, default 2).
 - Real GitHub PR is wired through `GitHubRestPullRequestProvider` (REST API). `repair.github.client=rest|cli` selects the client (default `rest`); `gh CLI` is no longer required. Owner/repo come from `repair.github.owner` / `repair.github.repo` first, falling back to parsing `git remote get-url origin` via `GitRepoLocator`. `GitTools.commitAndPush` fetches and checks out `repair.git.base-branch` (default `demo/fault/quantity-division-by-zero`) before creating the `repair/{sessionId}` head branch, and uses `fix(repair): {plan.repairTarget()}` as the commit message.
-- Feishu v2 interactive card: `FeishuTools.sendRepairCard` builds a v2.0 schema with header title from repair outcome, summary text (outcome / root cause / review reason / PR URL), a separate timing/token block, "View PR" button, and session-id footer; supports optional `FEISHU_SIGNING_SECRET` HMAC-SHA256 signing; `NotifyOperator` passes `RepairOutcome`, `RepairTiming`, and `PullRequestResult` into the card. Failed repairs use failure copy and must not claim "fixed".
+- Feishu v2 interactive card: `FeishuTools.sendRepairCard` builds a v2.0 schema with header title from repair outcome, summary text (outcome / root cause / review reason / PR URL), a separate timing/token block, "View PR" button, and session-id footer; supports optional `FEISHU_SIGNING_SECRET` HMAC-SHA256 signing; `NotifyOperator` passes `RepairOutcome`, `RepairTiming`, and `PullRequestResult` into the card. Failed repairs use failure copy and must not claim "fixed". If model token usage is unavailable, the card says usage was not returned/collected instead of showing 0.
 - Prompt/SSE payloads are intentionally bounded: traceback, read-file results, source context, and tool event messages are trimmed before they are passed to the AI sub-agents. The reflexion path also trims test stderr (~2000 chars) before feeding it to `AgenticPatchAgent`.
-- Repair timing and token observability is implemented: completed SSE events include `stepName=repairWorkflow`, `mode=java-dag`, `patchAttempts`, `durationMillis`, and `modelUsage`; AI-agent completion events include per-agent model usage; repair record JSON includes `timing.modelUsage`; repair record Markdown includes `Timing` and `Model Usage` tables.
-- Latest rollback E2E: session `rollback-e2e-001` used `deepseek-v4-flash` through the OpenAI-compatible provider, completed the `quantity-division-by-zero` repair in about 93 seconds, patched `OrderService.java`, passed all 5 target-service tests, and skipped Git/GitHub/Feishu because they were disabled.
+- Repair timing and token observability is implemented: `AgenticRepairRunner` times Java DAG steps directly; completed SSE events include `stepName=repairWorkflow`, `mode=java-dag`, `patchAttempts`, `durationMillis`, and `modelUsage`; AI-agent completion events include per-agent model usage when the provider returns token metadata; repair record JSON includes `timing.modelUsage`; repair record Markdown includes `Timing` and `Model Usage` tables.
+- Latest real E2E: session `real-e2e-003` ran on `demo/fault/quantity-division-by-zero`, completed the `quantity-division-by-zero` repair in about 68 seconds, patched `OrderService.java`, passed all 5 target-service tests, pushed `repair/real-e2e-003`, created GitHub PR https://github.com/deibudei/agent-aiOps/pull/1, sent the Feishu success card, wrote `repair-records/real-e2e-003.json` / `.md`, and completed with `outcome=FIXED`.
 - All AI sub-agents return strongly typed records (`DiagnosisResult`, `RepairPlan`, `PatchProposal`, `RepairReflection`) with LangChain4j `@Description` field annotations; Java parser/operators validate typed objects and retry once before surfacing `ERROR`.
 - Role-specific model routing is configured locally with `repair.llm.diagnosis-model`, `repair.llm.plan-model`, `repair.llm.patch-model`, and `repair.llm.reflection-model` in `application-local.yml` or equivalent environment variables. The supervisor model override has been removed. If only one role gets a stronger model, use `patch-model` first since it both generates and rewrites patches.
 - Repair outcomes are explicit: completed SSE events and repair records include `RepairOutcome` (`FIXED`, `FAILED`, `ERROR`) and `outcomeReason`. Patch/test/review/PR failures are controlled `COMPLETED + FAILED`; workflow exceptions are `ERROR` with a minimal error record.
 - For real PR demos, do not inject a temporary fault on `main` and expect a useful PR diff. `main` stays repaired. Use `demo/fault/quantity-division-by-zero` as a committed faulty base branch (current `main` plus only the division-by-zero fault), and set `REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero`.
+- Do ongoing project work on `main` or normal feature branches targeting `main`. Do not modify docs or platform code on `demo/fault/...` or `repair/{sessionId}` branches. After `main` changes, refresh the demo fault branch from latest `main` and keep only the intentional fault commit on top (`git checkout -B demo/fault/quantity-division-by-zero main`, inject the fault, commit it, then `git push --force-with-lease origin demo/fault/quantity-division-by-zero`). Treat `repair/{sessionId}` branches as disposable demo outputs.
+- Real GitHub PR token requirement: if `GITHUB_TOKEN` is a fine-grained personal access token, Repository access must include `deibudei/agent-aiOps`, with `Contents: Read and write` and `Pull requests: Read and write`. Read-only code/PR permission causes GitHub HTTP 403 during PR creation even when local `git push` succeeds through separate Git credentials.
 
 ## Local Skill Setup
 
@@ -62,7 +64,7 @@ Useful local skills for the next phase:
 - `superpowers` was requested on 2026-04-25, but the local path is a broken junction to `C:\Users\wuyib\.codex\superpowers`; do not rely on it until that target is restored.
 - Restart Codex after installing new skills so newly installed skills are picked up by the session.
 
-## Next Phase: Real Agent Repair
+## Current Repair Architecture
 
 Repair is implemented as a deterministic Java DAG with four LangChain4j AI sub-agents:
 
@@ -79,7 +81,7 @@ Current implementation status:
 2. LangChain4j OpenAI-compatible model integration is implemented with configurable timeout and retry behavior.
 3. Deterministic Java DAG implementation lives in `repair/agentic` with AI sub-agents under `repair/agentic/agents` and non-AI operators under `repair/agentic/operators`.
 4. Reflexion (apply -> test -> rollback -> regenerate) bounded by `repair.workflow.max-patch-attempts`.
-5. Real GitHub PR via REST API and real Feishu v2 card with timing/token block are implemented and gated by enable flags.
+5. Real GitHub PR via REST API and real Feishu v2 card with timing/token block are implemented, gated by enable flags, and validated in `real-e2e-003`.
 6. Demo fault injection is available for local replay.
 7. Next work: validate more fault types end to end, add more orchestration-level tests, and improve repair record retrieval/knowledge reuse.
 
@@ -91,7 +93,7 @@ Current implementation status:
 - `AgenticRepairRunner` instantiates each AI sub-agent through `AgenticServices.agentBuilder(...)` and calls them sequentially in Java; AI agent interfaces live in `repair/agentic/agents`, non-AI execution nodes live in `repair/agentic/operators`, and shared state/tools/listeners/helpers live directly under `repair/agentic`.
 - AI sub-agents get read-only `@Tool` methods for logs/code. Patch apply, Git, GitHub REST, Feishu, and records remain non-AI components.
 - Typed AI outputs are validated by Java gates in diagnosis, plan, patch, and reflection paths. Invalid typed output gets one retry.
-- `RepairTimingCollector` records Agentic step timing with monotonic durations plus LangChain4j model usage from `AgentResponse.chatResponse().modelName()` and `tokenUsage()`, then stores it in repair records.
+- `RepairTimingCollector` records Agentic step timing with monotonic durations. LangChain4j model usage is collected separately from `AgentResponse.chatResponse().modelName()` and `tokenUsage()` when available, then stored in repair records.
 - LangChain4j does not write files directly. `PatchTools` and `ToolPolicy` remain the only write path.
 
 ## Modules

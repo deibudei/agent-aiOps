@@ -163,26 +163,29 @@ public class AgenticRepairRunner {
 
         eventHub.publish(sessionId, RepairStage.EXECUTING, "Starting deterministic repair DAG");
 
-        evidenceOperator.collectEvidence();
+        timed(state, "collectEvidence", evidenceOperator::collectEvidence, "Evidence collected");
 
         DiagnosisResult diagnosis = diagnoseWithOneRetry(diagnosisAgent, state);
         state.diagnosis = diagnosis;
 
         planWithOneRetry(planAgent, planParserOperator, state, diagnosis);
 
-        sourceContextOperator.prepareSourceContext(state.evidence, state.plan);
+        timed(state, "prepareSourceContext",
+                () -> sourceContextOperator.prepareSourceContext(state.evidence, state.plan),
+                "Source context prepared");
 
         runReflexionLoop(patchAgent, patchRegenerationAgent, patchParserOperator,
                 patchApplyOperator, testOperator, state);
 
-        reviewOperator.reviewRepair();
+        timed(state, "reviewRepair", reviewOperator::reviewRepair, "Repair reviewed");
 
         if (state.reviewDecision != null && state.reviewDecision.status() == ReviewStatus.PASS) {
-            commitOperator.commitRepair();
+            timed(state, "commitRepair", commitOperator::commitRepair, "Commit step completed");
             if (gitFailureShouldFailRun(state)) {
                 state.markOutcome(RepairOutcome.FAILED, state.gitCommitResult.message());
             } else {
-                pullRequestOperator.createPullRequest();
+                timed(state, "createPullRequest", pullRequestOperator::createPullRequest,
+                        "Pull request step completed");
                 state.markOutcome(outcomeAfterPr(state), outcomeReasonAfterPr(state));
             }
         } else {
@@ -192,9 +195,9 @@ public class AgenticRepairRunner {
                     "Skipping commit/PR because review did not pass");
         }
 
-        notifyOperator.sendNotification();
+        timed(state, "sendNotification", notifyOperator::sendNotification, "Notification step completed");
 
-        reflectOperator.reflectRepair();
+        timed(state, "reflectRepair", reflectOperator::reflectRepair, "Reflection completed");
 
         recordOperator.writeRepairRecord();
 
@@ -229,6 +232,7 @@ public class AgenticRepairRunner {
             PatchProposal proposal;
             if (attempt == 1) {
                 proposal = patchWithOneRetry(
+                        "generatePatchProposal",
                         () -> patchAgent.generatePatchProposal(state.plan, state.sourceContext),
                         patchParserOperator,
                         state);
@@ -239,6 +243,7 @@ public class AgenticRepairRunner {
                 String trimmedTestFailure =
                         AgenticEvidenceFormatter.trim(testStderr(lastTestResult), TEST_STDERR_PROMPT_CHARS);
                 proposal = patchWithOneRetry(
+                        "regeneratePatchProposal",
                         () -> patchRegenerationAgent.regeneratePatchFromTestFailure(
                                 state.plan,
                                 state.sourceContext,
@@ -249,12 +254,16 @@ public class AgenticRepairRunner {
             }
             previousProposal = state.patchProposal;
 
-            patchApplyOperator.applyPatchProposal(state.patchProposal);
+            timed(state, "applyPatchProposal",
+                    () -> patchApplyOperator.applyPatchProposal(state.patchProposal),
+                    "Patch apply completed");
             if (!state.patchApplicationResult.success()) {
                 return;
             }
 
-            lastTestResult = testOperator.runTargetTests();
+            lastTestResult = timed(state, "runTargetTests",
+                    testOperator::runTargetTests,
+                    "Target-service tests completed");
             if (lastTestResult.success()) {
                 return;
             }
@@ -262,7 +271,9 @@ public class AgenticRepairRunner {
                 return;
             }
 
-            patchApplyOperator.rollbackLastApply();
+            timed(state, "rollbackPatchProposal",
+                    patchApplyOperator::rollbackLastApply,
+                    "Rolled back failed patch attempt");
         }
     }
 
@@ -287,8 +298,11 @@ public class AgenticRepairRunner {
         RuntimeException firstFailure = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
             try {
-                DiagnosisResult diagnosis = diagnosisAgent.diagnoseRootCause(state.evidence);
-                validateDiagnosis(diagnosis);
+                DiagnosisResult diagnosis = timed(state, "diagnoseRootCause", () -> {
+                    DiagnosisResult result = diagnosisAgent.diagnoseRootCause(state.evidence);
+                    validateDiagnosis(result);
+                    return result;
+                }, "Diagnosis output validated");
                 return diagnosis;
             } catch (RuntimeException e) {
                 firstFailure = e;
@@ -307,8 +321,11 @@ public class AgenticRepairRunner {
         RuntimeException firstFailure = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
             try {
-                RepairPlan plan = planAgent.generateRepairPlan(state.evidence, diagnosis);
-                planParserOperator.parseRepairPlan(plan);
+                timed(state, "generateRepairPlan", () -> {
+                    RepairPlan plan = planAgent.generateRepairPlan(state.evidence, diagnosis);
+                    planParserOperator.parseRepairPlan(plan);
+                    return plan;
+                }, "Repair plan output validated");
                 return;
             } catch (RuntimeException e) {
                 firstFailure = e;
@@ -320,13 +337,16 @@ public class AgenticRepairRunner {
     }
 
     private PatchProposal patchWithOneRetry(
+            String stepName,
             Supplier<PatchProposal> proposalSupplier,
             PatchParserOperator patchParserOperator,
             AgenticRepairState state) {
         RuntimeException firstFailure = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
             try {
-                return patchParserOperator.parsePatchProposal(proposalSupplier.get());
+                return timed(state, stepName,
+                        () -> patchParserOperator.parsePatchProposal(proposalSupplier.get()),
+                        "Patch proposal output validated");
             } catch (RuntimeException e) {
                 firstFailure = e;
                 eventHub.publish(state.sessionId, RepairStage.PATCHING,
@@ -389,6 +409,32 @@ public class AgenticRepairRunner {
             return result == null ? "GitHub PR did not run" : result.message();
         }
         return "Patch passed review and GitHub PR creation is disabled";
+    }
+
+    private <T> T timed(AgenticRepairState state, String stepName, Supplier<T> action, String successSummary) {
+        state.beginTiming(stepName);
+        try {
+            T result = action.get();
+            state.endTiming(stepName, true, successSummary);
+            return result;
+        } catch (RuntimeException e) {
+            state.endTiming(stepName, false, describe(e));
+            throw e;
+        }
+    }
+
+    private void timed(AgenticRepairState state, String stepName, Runnable action, String successSummary) {
+        timed(state, stepName, () -> {
+            action.run();
+            return null;
+        }, successSummary);
+    }
+
+    private String describe(RuntimeException exception) {
+        String message = exception.getMessage();
+        return message == null || message.isBlank()
+                ? exception.getClass().getSimpleName()
+                : exception.getClass().getSimpleName() + ": " + message;
     }
 
     private Map<String, String> roleByAgent() {

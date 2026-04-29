@@ -7,15 +7,12 @@ import dev.langchain4j.agentic.observability.AgentRequest;
 import dev.langchain4j.agentic.observability.AgentResponse;
 import dev.langchain4j.agentic.observability.BeforeAgentToolExecution;
 import java.util.Map;
-import java.util.Set;
 import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.service.RepairEventHub;
 
 /** Bridges LangChain4j Agentic events into the repair SSE stream. */
 public final class RepairAgenticListener implements AgentListener {
-
-    private static final Set<String> TIMING_EXCLUDED_AGENTS = Set.of();
 
     private final AgenticRepairState state;
     private final String sessionId;
@@ -37,9 +34,6 @@ public final class RepairAgenticListener implements AgentListener {
 
     @Override
     public void beforeAgentInvocation(AgentRequest request) {
-        if (shouldTime(request.agentName())) {
-            state.beginTiming(request.agentName());
-        }
         eventHub.publish(sessionId, RepairStage.EXECUTING,
                 "Agentic invoking " + request.agentName());
     }
@@ -51,9 +45,6 @@ public final class RepairAgenticListener implements AgentListener {
                 roleByAgent.get(response.agentName()),
                 modelByAgent.get(response.agentName()),
                 response.chatResponse());
-        if (shouldTime(response.agentName())) {
-            state.endTiming(response.agentName(), true, "Agent completed");
-        }
         if (modelUsage == null) {
             eventHub.publish(sessionId, RepairStage.EXECUTING,
                     "Agentic completed " + response.agentName());
@@ -66,9 +57,6 @@ public final class RepairAgenticListener implements AgentListener {
 
     @Override
     public void onAgentInvocationError(AgentInvocationError error) {
-        if (shouldTime(error.agentName())) {
-            state.endTiming(error.agentName(), false, errorMessage(error));
-        }
         eventHub.publish(sessionId, RepairStage.ERROR,
                 "Agentic agent failed: " + error.agentName() + ": " + errorMessage(error));
     }
@@ -90,10 +78,6 @@ public final class RepairAgenticListener implements AgentListener {
     @Override
     public boolean inheritedBySubagents() {
         return true;
-    }
-
-    private boolean shouldTime(String agentName) {
-        return agentName != null && !TIMING_EXCLUDED_AGENTS.contains(agentName);
     }
 
     private String errorMessage(AgentInvocationError error) {

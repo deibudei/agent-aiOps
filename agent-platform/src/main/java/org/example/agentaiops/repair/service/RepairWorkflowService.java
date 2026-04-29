@@ -1,5 +1,8 @@
 package org.example.agentaiops.repair.service;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.UndeclaredThrowableException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +15,7 @@ import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairReflection;
 import org.example.agentaiops.repair.model.RepairRunResponse;
 import org.example.agentaiops.repair.model.RepairStage;
+import org.example.agentaiops.repair.model.RepairTiming;
 import org.example.agentaiops.repair.model.ToolExecutionResult;
 import org.example.agentaiops.repair.tool.RepairRecordTools;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -84,11 +88,12 @@ public class RepairWorkflowService {
     }
 
     private void writeErrorRecord(String sessionId, Instant startedAt, String outcomeReason) {
+        Instant completedAt = Instant.now();
         RepairRecord record = new RepairRecord(
                 1,
                 sessionId,
                 startedAt,
-                Instant.now(),
+                completedAt,
                 RepairOutcome.ERROR,
                 outcomeReason,
                 null,
@@ -112,7 +117,12 @@ public class RepairWorkflowService {
                         List.of(
                                 "Check LLM provider configuration and credentials.",
                                 "Inspect the ERROR SSE event details before rerunning the repair.")),
-                null);
+                new RepairTiming(
+                        startedAt,
+                        completedAt,
+                        Math.max(0, Duration.between(startedAt, completedAt).toMillis()),
+                        List.of(),
+                        List.of()));
         try {
             ToolExecutionResult write = repairRecordTools.writeRecord(record);
             if (!write.success()) {
@@ -139,10 +149,28 @@ public class RepairWorkflowService {
 
     /** Includes exception type when an exception has no message. */
     private String describe(Exception exception) {
-        String message = exception.getMessage();
+        Throwable root = unwrap(exception);
+        String message = root.getMessage();
         if (message == null || message.isBlank()) {
-            return exception.getClass().getSimpleName();
+            return root.getClass().getSimpleName();
         }
-        return exception.getClass().getSimpleName() + ": " + message;
+        return root.getClass().getSimpleName() + ": " + message;
+    }
+
+    private Throwable unwrap(Throwable throwable) {
+        Throwable current = throwable;
+        while (true) {
+            if (current instanceof UndeclaredThrowableException undeclared
+                    && undeclared.getUndeclaredThrowable() != null) {
+                current = undeclared.getUndeclaredThrowable();
+                continue;
+            }
+            if (current instanceof InvocationTargetException invocation
+                    && invocation.getTargetException() != null) {
+                current = invocation.getTargetException();
+                continue;
+            }
+            return current;
+        }
     }
 }

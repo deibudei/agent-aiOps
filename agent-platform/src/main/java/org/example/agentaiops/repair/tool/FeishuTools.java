@@ -196,12 +196,22 @@ public class FeishuTools {
         }
         long durationMillis = timing.durationMillis();
         double durationSeconds = durationMillis / 1000.0;
+        return String.format(
+                "**耗时与 Token**\n- 总耗时：%.2fs\n%s",
+                durationSeconds, tokenUsageLine(timing));
+    }
+
+    private String tokenUsageLine(RepairTiming timing) {
+        if (timing.modelUsage() == null || timing.modelUsage().isEmpty()) {
+            return "- Token：未采集到模型 usage";
+        }
         long inputTokens = sumTokens(timing, RepairModelUsage::inputTokenCount);
         long outputTokens = sumTokens(timing, RepairModelUsage::outputTokenCount);
         long totalTokens = sumTokens(timing, RepairModelUsage::totalTokenCount);
-        return String.format(
-                "**耗时与 Token**\n- 总耗时：%.2fs\n- Token：input %d / output %d / total %d",
-                durationSeconds, inputTokens, outputTokens, totalTokens);
+        if (!hasTokenUsage(timing)) {
+            return "- Token：provider 未返回 token usage（model calls " + modelCallCount(timing) + "）";
+        }
+        return "- Token：input %d / output %d / total %d".formatted(inputTokens, outputTokens, totalTokens);
     }
 
     private List<Map<String, Object>> buildButtons(String prUrl, String sessionId) {
@@ -235,6 +245,25 @@ public class FeishuTools {
             }
         }
         return total;
+    }
+
+    private boolean hasTokenUsage(RepairTiming timing) {
+        for (RepairModelUsage usage : timing.modelUsage()) {
+            if (usage.inputTokenCount() != null
+                    || usage.outputTokenCount() != null
+                    || usage.totalTokenCount() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int modelCallCount(RepairTiming timing) {
+        int calls = 0;
+        for (RepairModelUsage usage : timing.modelUsage()) {
+            calls += usage.callCount();
+        }
+        return calls;
     }
 
     private String emptyDash(String value) {

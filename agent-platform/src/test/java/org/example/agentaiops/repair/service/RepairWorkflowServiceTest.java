@@ -41,7 +41,10 @@ class RepairWorkflowServiceTest {
                 eq(RepairStage.ERROR),
                 contains("REPAIR_LLM_ENABLED=true"),
                 anyMap());
-        verify(recordTools).writeRecord(argThat(record -> record.outcome() == RepairOutcome.ERROR));
+        verify(recordTools).writeRecord(argThat(record ->
+                record.outcome() == RepairOutcome.ERROR
+                        && record.timing() != null
+                        && record.timing().durationMillis() >= 0));
         verify(runner, never()).run(any(), any(Instant.class));
     }
 
@@ -69,7 +72,9 @@ class RepairWorkflowServiceTest {
                 anyMap());
         verify(recordTools).writeRecord(argThat(record ->
                 record.outcome() == RepairOutcome.ERROR
-                        && record.outcomeReason().contains("model returned invalid patch")));
+                        && record.outcomeReason().contains("model returned invalid patch")
+                        && record.timing() != null
+                        && record.timing().durationMillis() >= 0));
     }
 
     @Test
