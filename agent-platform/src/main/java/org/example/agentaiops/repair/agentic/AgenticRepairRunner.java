@@ -122,28 +122,28 @@ public class AgenticRepairRunner {
                 modelByAgent());
 
         AgenticDiagnosisAgent diagnosisAgent = AgenticServices.agentBuilder(AgenticDiagnosisAgent.class)
-                .chatModel(chatModelProvider.chatModel(RepairModelRole.DIAGNOSIS))
+                .chatModel(observedChatModel(state, "diagnoseRootCause", RepairModelRole.DIAGNOSIS))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPlanAgent planAgent = AgenticServices.agentBuilder(AgenticPlanAgent.class)
-                .chatModel(chatModelProvider.chatModel(RepairModelRole.PLAN))
+                .chatModel(observedChatModel(state, "generateRepairPlan", RepairModelRole.PLAN))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPatchAgent patchAgent = AgenticServices.agentBuilder(AgenticPatchAgent.class)
-                .chatModel(chatModelProvider.chatModel(RepairModelRole.PATCH))
+                .chatModel(observedChatModel(state, "generatePatchProposal", RepairModelRole.PATCH))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPatchRegenerationAgent patchRegenerationAgent = AgenticServices
                 .agentBuilder(AgenticPatchRegenerationAgent.class)
-                .chatModel(chatModelProvider.chatModel(RepairModelRole.PATCH))
+                .chatModel(observedChatModel(state, "regeneratePatchProposal", RepairModelRole.PATCH))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
         AgenticReflectionAgent reflectionAgent = AgenticServices.agentBuilder(AgenticReflectionAgent.class)
-                .chatModel(chatModelProvider.chatModel(RepairModelRole.REFLECTION))
+                .chatModel(observedChatModel(state, "reflectRepair", RepairModelRole.REFLECTION))
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
@@ -435,6 +435,18 @@ public class AgenticRepairRunner {
         return message == null || message.isBlank()
                 ? exception.getClass().getSimpleName()
                 : exception.getClass().getSimpleName() + ": " + message;
+    }
+
+    private ObservedChatModel observedChatModel(
+            AgenticRepairState state,
+            String stepName,
+            RepairModelRole role) {
+        return new ObservedChatModel(
+                chatModelProvider.chatModel(role),
+                state,
+                stepName,
+                role.name(),
+                chatModelProvider.modelName(role));
     }
 
     private Map<String, String> roleByAgent() {

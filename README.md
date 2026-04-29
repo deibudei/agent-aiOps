@@ -91,9 +91,10 @@ Implemented behavior:
 - `RepairModelUsage` aggregates per-step model role, configured model, response model, call count, input tokens, output tokens, and total tokens.
 - `RepairTimingCollector` records display timestamps with `Instant.now()` and calculates durations with `System.nanoTime()`.
 - `AgenticRepairRunner` times Java DAG steps directly, so timing does not depend on LangChain4j listener delivery.
-- `RepairAgenticListener` reads LangChain4j `AgentResponse.chatResponse().modelName()` and `tokenUsage()` after each AI agent invocation; it only records model usage.
+- `ObservedChatModel` wraps each role-specific `ChatModel` and records `ChatResponse.modelName()` plus `tokenUsage()` at the model boundary, before Agentic typed-output handling can drop response metadata.
+- `RepairAgenticListener` only publishes Agentic lifecycle and tool-call events.
 - Agentic agent/operator calls are timed, including evidence, diagnosis, plan, patch, test, review, commit, PR, notification, reflection, and record writing.
-- Completed SSE events include `durationMillis`, `stepName`, and `modelUsage`; AI-agent completion events include model usage when the provider returns token metadata.
+- Completed SSE events include `durationMillis`, `stepName`, and `modelUsage`.
 - `repair-records/{sessionId}.json` includes a `timing` field with `modelUsage`, and `repair-records/{sessionId}.md` includes `Timing` and `Model Usage` tables. Some OpenAI-compatible providers may omit token usage; in that case token fields stay empty and the Feishu token line says the provider did not return token usage, instead of showing zero.
 
 Validation:

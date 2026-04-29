@@ -107,10 +107,11 @@ git push --force-with-lease origin demo/fault/quantity-division-by-zero
 - `RepairModelUsage` 汇总每个模型步骤的角色、配置模型、响应模型、调用次数、input tokens、output tokens 和 total tokens。
 - 内部 `RepairTimingCollector` 用 `Instant.now()` 记录展示时间，用 `System.nanoTime()` 计算耗时，避免系统时间跳变影响统计。
 - `AgenticRepairRunner` 对 Java DAG 节点主动计时，不再依赖 LangChain4j listener 是否触发。
-- `RepairAgenticListener` 在每个 AI Agent 完成后读取 LangChain4j `AgentResponse.chatResponse().modelName()` 和 `tokenUsage()`，只负责模型 usage 采集。
+- `ObservedChatModel` 包装每个分角色 `ChatModel`，在模型边界直接记录 `ChatResponse.modelName()` 和 `tokenUsage()`，避免 Agentic 强类型输出路径丢失响应元数据。
+- `RepairAgenticListener` 只发布 Agentic 生命周期和工具调用事件。
 - Agentic 链路对 evidence、diagnosis、plan、patch、test、review、commit、PR、notify、reflect、record 等节点逐个计时。
-- SSE 完成事件的 `details` 增加 `durationMillis`、`stepName` 和 `modelUsage`；AI Agent 完成事件会在 provider 返回 usage metadata 时带上该 Agent 的模型/token 使用情况。
-- `repair-records/{sessionId}.json` 增加 `timing.modelUsage` 字段，`repair-records/{sessionId}.md` 增加 `Timing` 和 `Model Usage` 表格，用于后续报告和性能分析。若 provider 没返回 token usage，usage 行仍可记录模型调用次数，但 token 字段为空；若 listener 没采到模型 usage，飞书卡片显示“未采集到模型 usage”。
+- SSE 完成事件的 `details` 增加 `durationMillis`、`stepName` 和 `modelUsage`。
+- `repair-records/{sessionId}.json` 增加 `timing.modelUsage` 字段，`repair-records/{sessionId}.md` 增加 `Timing` 和 `Model Usage` 表格，用于后续报告和性能分析。若 provider 没返回 token usage，usage 行仍可记录模型调用次数，但 token 字段为空；若模型 wrapper 没采到模型 usage，飞书卡片显示“未采集到模型 usage”。
 
 验收方式：
 
