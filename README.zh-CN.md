@@ -28,20 +28,20 @@
 -> 生成修复记录
 ```
 
-修复链路是一条确定性的 Java DAG：3 个 LangChain4j AI 子 Agent 只负责语言任务（诊断、规划、补丁/重写补丁），其余节点全部由 Java 顺序调用，不依赖 LLM 决策。第一版采用手动按钮/API 触发，GitHub PR 和飞书通知默认关闭，录制比赛演示时通过环境变量开启真实 PR 和真实飞书卡片即可。
+修复链路是一条确定性的 Java DAG：4 个 LangChain4j AI 子 Agent 只负责语言任务（诊断、规划、补丁/重写补丁、反思），其余节点全部由 Java 顺序调用，不依赖 LLM 决策。第一版采用手动按钮/API 触发，LLM、GitHub PR 和飞书通知默认关闭，录制比赛演示时通过环境变量开启真实 PR 和真实飞书卡片即可。
 
 ## 当前 Agent 成熟度
 
-当前代码已经打通后端闭环，并收敛为「确定性 Java DAG + 3 个 LangChain4j AI 子 Agent」单一路径：
+当前代码已经打通后端闭环，并收敛为「确定性 Java DAG + 4 个 LangChain4j AI 子 Agent」单一路径：
 
 - 已实现：异常读取、诊断、计划、代码读取、补丁生成、补丁回写、测试执行、reflexion 测试失败重写、diff review、Git commit/push、GitHub REST API 创建 PR、飞书 v2 卡片、修复记录和反思沉淀。
-- 编排方式：`AgenticRepairRunner` 用 Java 顺序调用各 operator，不再使用 `SupervisorAgent`；3 个 AI 子 Agent 通过 `AgenticServices.agentBuilder` 直接构造和调用，其它节点（证据、补丁应用、测试、审查、commit、PR、飞书、反思、记录）都是 non-AI Java 组件。
-- AI 角色：`AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent` 都返回强类型对象（`DiagnosisResult` / `RepairPlan` / `PatchProposal`），字段使用 LangChain4j `@Description` 描述。`AgenticPatchAgent.regeneratePatchFromTestFailure` 在 reflexion 重试中根据测试 stderr 重写补丁。
+- 编排方式：`AgenticRepairRunner` 用 Java 顺序调用各 operator，不再使用 `SupervisorAgent`；AI 子 Agent 通过 `AgenticServices.agentBuilder` 直接构造和调用，其它节点（证据、补丁应用、测试、审查、commit、PR、飞书、记录）都是 non-AI Java 组件。
+- AI 角色：`AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent`、`AgenticReflectionAgent` 都返回强类型对象（`DiagnosisResult` / `RepairPlan` / `PatchProposal` / `RepairReflection`），字段使用 LangChain4j `@Description` 描述。`AgenticPatchAgent.regeneratePatchFromTestFailure` 在 reflexion 重试中根据测试 stderr 重写补丁；结构化输出会经过 Java 校验，格式/业务校验失败会重试一次。
 - Reflexion：`repair.workflow.max-patch-attempts` 控制重写次数（默认 2）。一次补丁应用前会先快照原文件内容，测试失败后回滚到该快照再重新生成补丁，避免错叠多份补丁。
 - GitHub 集成：默认走 GitHub REST API（`repair.github.client=rest`），不依赖 `gh CLI`。Owner/Repo 优先读 `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO`，未配置时自动从 `git remote get-url origin` 解析 HTTPS/SSH URL。
-- 飞书 v2 卡片：标题随修复目标变化，卡片内容包括根因摘要、Review 结论、PR 链接、总耗时、token 消耗，并提供「查看 PR」按钮和会话 footer；如果配置 `FEISHU_SIGNING_SECRET`，请求体会带上 `timestamp` + `sign` 校验。
-- 已验证：`quantity-division-by-zero` 故障下，链路能读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review，并写入修复记录。回滚后的本地 `rollback-e2e-001` 使用 `deepseek-v4-flash` 完成完整修复链路，耗时约 93 秒，Git/GitHub/飞书因默认关闭而安全跳过。
-- 当前限制：修复运行必须配置 `REPAIR_LLM_ENABLED=true` 和对应 provider API key；模型不可用或 JSON 输出非法会发布 `ERROR`，不再走确定性 fallback。写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
+- 飞书 v2 卡片：成功修复和失败修复使用不同标题/文案，卡片内容包括根因摘要、Review 结论、PR 链接、总耗时、token 消耗，并提供「查看 PR」按钮和会话 footer；如果配置 `FEISHU_SIGNING_SECRET`，请求体会带上 `timestamp` + `sign` 校验。
+- 已验证：`quantity-division-by-zero` 故障下，链路能读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review，并写入修复记录。真实 GitHub PR 和飞书卡片也已手动跑通。
+- 当前限制：修复运行必须配置 `REPAIR_LLM_ENABLED=true` 和对应 provider API key；模型不可用或结构化输出连续两次非法会发布 `ERROR`，并写入最小错误记录，不再走确定性 fallback。写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
 
 ## 当前实现状态与下一步
 
@@ -55,9 +55,28 @@
 - Agentic 补丁：LangChain4j Agentic 子 Agent 直接返回强类型 `PatchProposal`，字段使用 `@Description` 描述，并由 Java gate 做业务校验。
 - 安全执行：`PatchTools + ToolPolicy` 是唯一写文件通道。
 - 审查门禁：路径越界、空 diff、测试失败、review 不通过都会阻断后续 commit/PR/飞书。
-- Agentic 编排：`AgenticRepairRunner` 只负责装配 Supervisor，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
+- Agentic 编排：`AgenticRepairRunner` 负责装配并顺序调用 Java DAG，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
 - 修复耗时与 token 观测：`RepairTiming` 记录总耗时、每个 Agentic 节点耗时、模型名称和 token 消耗，并写入 SSE、JSON 记录和 Markdown 记录。
 - 演示故障：已提供 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 三类故障注入 API。
+- 修复结果：SSE completed 事件和修复记录写入 `outcome=FIXED|FAILED|ERROR` 与 `outcomeReason`。patch/test/review/PR 的受控失败是 `COMPLETED + FAILED`；系统异常是 `ERROR`，并写入最小错误记录。
+
+### 真实 PR 演示分支模型
+
+`main` 永远保持正常修复态。真实 PR 演示不要在 `main` 上临时注入故障后期待 diff；应使用一条已经提交故障的 demo base 分支：
+
+```text
+main                                  正常修复态
+demo/fault/quantity-division-by-zero  当前 main + 已提交的除零故障
+repair/{sessionId}                    Agent 自动创建的修复分支
+```
+
+录制真实 PR 演示时设置：
+
+```powershell
+$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
+```
+
+这样 PR 会从 `repair/{sessionId}` 指向 `demo/fault/quantity-division-by-zero`，diff 只展示 Agent 把故障代码修回正确代码。旧的 `repair-demo-target` 不再作为比赛主演示 base，因为它可能落后当前 `main` 太多。
 
 下一步：
 
@@ -68,7 +87,7 @@
 
 ### 修复耗时与 token 观测
 
-当前已经在保持完整 Agentic 修复链路的前提下，量化“修复一个 bug 到底花了多久、每个模型步骤花了多少 token”。Agentic Supervisor、诊断、计划、补丁、测试、审查、commit、PR、飞书、反思和记录等节点仍然完整执行，观测数据只作为旁路记录。
+当前已经在保持完整 Agentic 修复链路的前提下，量化“修复一个 bug 到底花了多久、每个模型步骤花了多少 token”。诊断、计划、补丁、测试、审查、commit、PR、飞书、反思和记录等节点仍然完整执行，观测数据只作为旁路记录。
 
 已实现：
 
@@ -106,19 +125,20 @@ Java DAG (AgenticRepairRunner)
   ├── CommitOperator
   ├── PullRequestOperator    (GitHub REST API)
   ├── NotifyOperator         (飞书 v2 卡片)
+  ├── AgenticReflectionAgent (LangChain4j @Agent，返回 RepairReflection)
   ├── ReflectOperator
   └── RecordOperator
 ```
 
 关键类：
 
-- `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`，并支持 diagnosis/plan/patch 分角色模型覆盖。
-- `AgenticRepairRunner`：用 Java 顺序调用所有 operator，3 个 AI 子 Agent 通过 `AgenticServices.agentBuilder(...)` 直接构造，无 SupervisorAgent。
-- `AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent`：直接返回强类型对象，字段使用 LangChain4j `@Description` 描述；Plan/Patch prompt 内置 few-shot 示例；`AgenticPatchAgent.regeneratePatchFromTestFailure` 接收测试 stderr 用于 reflexion 重写。
+- `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`，并支持 diagnosis/plan/patch/reflection 分角色模型覆盖。
+- `AgenticRepairRunner`：用 Java 顺序调用所有 operator，AI 子 Agent 通过 `AgenticServices.agentBuilder(...)` 直接构造，无 SupervisorAgent。
+- `AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent`、`AgenticReflectionAgent`：直接返回强类型对象，字段使用 LangChain4j `@Description` 描述；Plan/Patch prompt 内置 few-shot 示例；`AgenticPatchAgent.regeneratePatchFromTestFailure` 接收测试 stderr 用于 reflexion 重写。
 - `PatchApplyOperator`：在写文件前为每个目标文件生成 `PatchSnapshot`，便于 reflexion 失败后回滚。
 - `GitHubRestPullRequestProvider` + `GitRepoLocator`：默认走 GitHub REST API 创建 PR，自动从 `git remote get-url origin` 解析 owner/repo。
-- `FeishuTools`：构造飞书 v2 卡片 schema（header / 主文 / 耗时 token block / 查看 PR 按钮 / footer），支持可选签名。
-- `PatchTools`：唯一允许写入文件的工具，模型不能直接写文件。
+- `FeishuTools`：构造飞书 v2 卡片 schema（header / 主文 / 耗时 token block / 查看 PR 按钮 / footer），支持可选签名；成功和失败 outcome 使用不同卡片文案。
+- `PatchTools`：唯一允许写入文件的工具，模型不能直接写文件。应用补丁前会预检所有 operation，`oldText` 必须唯一命中，全部通过后才写文件。
 
 启用 OpenAI LLM：
 
@@ -130,9 +150,10 @@ $env:OPENAI_BASE_URL="https://api.openai.com/v1"
 $env:REPAIR_LLM_TIMEOUT_SECONDS="90"
 $env:REPAIR_LLM_MAX_RETRIES="1"
 $env:REPAIR_LLM_MAX_TOKENS="4096"
+$env:REPAIR_LLM_REFLECTION_MODEL=""
 ```
 
-模型名和分角色模型覆盖建议放在 `application-local.yml`，不要放在可上传的 `application.yml`。如果使用 OpenAI-compatible 模型（例如 DeepSeek、Qwen 等）时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。DAG 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上。三个模型角色里，`AgenticPatchAgent` 既要生成补丁也要在 reflexion 中根据 stderr 重写补丁，对精确代码修改和指令遵循能力要求最高，建议优先用更强模型；`AgenticDiagnosisAgent` 和 `AgenticPlanAgent` 通常可以先用默认模型，多因子故障再单独升配。
+模型名和分角色模型覆盖建议放在 `application-local.yml`，不要放在可上传的 `application.yml`。如果使用 OpenAI-compatible 模型（例如 DeepSeek、Qwen 等）时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。DAG 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上。四个模型角色里，`AgenticPatchAgent` 既要生成补丁也要在 reflexion 中根据 stderr 重写补丁，对精确代码修改和指令遵循能力要求最高，建议优先用更强模型；`AgenticDiagnosisAgent`、`AgenticPlanAgent` 和 `AgenticReflectionAgent` 通常可以先用默认模型，多因子故障再单独升配。
 
 如果 `REPAIR_LLM_ENABLED` 未启用或缺少 API key，`POST /api/repair/run` 会接受请求但在 SSE 中发布 `error` 事件，不会执行旧修复链路。
 
@@ -303,10 +324,11 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset
 ## 环境变量
 
 ```text
-REPAIR_LLM_ENABLED=true
+REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_TEMPERATURE=0.1
 REPAIR_LLM_MAX_TOKENS=4096
+REPAIR_LLM_REFLECTION_MODEL=
 REPAIR_MAX_PATCH_ATTEMPTS=2
 
 REPAIR_TARGET_LOG=target-service/logs
@@ -321,7 +343,7 @@ DASHSCOPE_BASE_URL=
 
 REPAIR_GIT_ENABLED=false
 REPAIR_GIT_REMOTE=origin
-REPAIR_BASE_BRANCH=repair-demo-target
+REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero
 
 REPAIR_GITHUB_ENABLED=false
 REPAIR_GITHUB_CLIENT=rest
@@ -349,7 +371,7 @@ agent-platform/src/main/resources/application.yml
 agent-platform/src/main/resources/application-local.yml
 ```
 
-`application-local.yml` 已加入 `.gitignore`，可以在里面填写真实 key 和本地模型选择，不要上传。`application.yml` 默认 include `local` profile，并通过 `optional:classpath:application-local.yml` 自动导入它，因此正常启动命令就会读取本地配置。当前可上传的 `application.yml` 不再选择 OpenAI/DashScope 默认模型，也不再写 supervisor/diagnosis/plan/patch 分角色模型覆盖：
+`application-local.yml` 已加入 `.gitignore`，可以在里面填写真实 key 和本地模型选择，不要上传。`application.yml` 默认 include `local` profile，并通过 `optional:classpath:application-local.yml` 自动导入它，因此正常启动命令就会读取本地配置。当前可上传的 `application.yml` 不再选择 OpenAI/DashScope 默认模型，也不再写 diagnosis/plan/patch/reflection 分角色模型覆盖：
 
 ```powershell
 cd D:\java_web_project\agent-aiOps
@@ -369,6 +391,7 @@ repair:
     enabled: true
     provider: openai
     patch-model: deepseek-v4-flash
+    reflection-model: deepseek-v4-flash
 ```
 
 隐私注意：
@@ -383,7 +406,7 @@ repair:
 - `REPAIR_GIT_ENABLED=false` 时，不会创建分支、commit 或 push。
 - `REPAIR_GITHUB_ENABLED=false` 时，不会调用 GitHub API 创建 PR。
 - `FEISHU_ENABLED=false` 时，不会发送飞书卡片。
-- 默认 base 分支是 `repair-demo-target`：在远端创建并保护这条分支后，每次修复都会从这条分支切出 `repair/{sessionId}` 子分支并向其发起 PR，避免直接对抗 `main`。
+- 默认 base 分支是 `demo/fault/quantity-division-by-zero`：这条分支应从当前 `main` 创建，只提交一个除零故障。每次真实 PR 演示都会从这条分支切出 `repair/{sessionId}` 子分支并向其发起 PR，避免直接对抗 `main`，也避免修回 `main` 后没有 diff。
 - 开启真实 PR 时，默认 `REPAIR_GITHUB_CLIENT=rest`，只需要导入 `GITHUB_TOKEN`（建议是 `repo` 权限的 fine-grained token），不需要安装 `gh CLI`；如需走 CLI，可设 `REPAIR_GITHUB_CLIENT=cli`。
 - `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` 留空时，会从 `git remote get-url origin` 自动解析。
 - 飞书 v2 卡片可选签名校验：在群机器人开启签名校验后填 `FEISHU_SIGNING_SECRET` 即可。
@@ -487,7 +510,7 @@ $env:REPAIR_GIT_ENABLED="true"
 $env:REPAIR_GITHUB_ENABLED="true"
 $env:REPAIR_GITHUB_CLIENT="rest"
 $env:GITHUB_TOKEN="你的 GitHub fine-grained token"
-$env:REPAIR_BASE_BRANCH="repair-demo-target"
+$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
 $env:FEISHU_ENABLED="true"
 $env:FEISHU_WEBHOOK_URL="你的飞书 webhook"
 $env:FEISHU_SIGNING_SECRET="飞书机器人签名密钥（如启用）"

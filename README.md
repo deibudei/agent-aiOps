@@ -17,7 +17,7 @@ Java implementation of a service auto-repair Agent demo.
 4. Call `POST /api/repair/run`.
 5. Watch repair events from `GET /api/repair/stream/{sessionId}`.
 
-The repair flow is a deterministic Java DAG with three LangChain4j AI sub-agents:
+The repair flow is a deterministic Java DAG with four LangChain4j AI sub-agents:
 
 ```text
 detect
@@ -29,7 +29,7 @@ detect
 -> commit
 -> PR (GitHub REST API)
 -> Feishu v2 card
--> reflect
+-> reflect (AI)
 -> record
 ```
 
@@ -39,27 +39,39 @@ The target service keeps the normal application log at `target-service/logs/targ
 
 ## Current Agent Maturity
 
-The backend loop is now a deterministic Java DAG (`AgenticRepairRunner`) coordinating three LangChain4j AI sub-agents (`AgenticDiagnosisAgent`, `AgenticPlanAgent`, `AgenticPatchAgent`) plus non-AI components for evidence collection, patch application, tests, review, commit, PR, notification, reflection, and repair records. There is no `SupervisorAgent` and no orchestration LLM call.
+The backend loop is now a deterministic Java DAG (`AgenticRepairRunner`) coordinating four LangChain4j AI sub-agents (`AgenticDiagnosisAgent`, `AgenticPlanAgent`, `AgenticPatchAgent`, `AgenticReflectionAgent`) plus non-AI components for evidence collection, patch application, tests, review, commit, PR, notification, and repair records. There is no `SupervisorAgent` and no orchestration LLM call.
 
 If a patched run fails the target tests, `AgenticPatchAgent.regeneratePatchFromTestFailure` receives the test stderr and rewrites the patch; `PatchApplyOperator` rolls back to the pre-apply file snapshot before the new patch is applied. The number of attempts is bounded by `REPAIR_MAX_PATCH_ATTEMPTS` (default 2).
 
-The flow has been verified end to end on the `quantity-division-by-zero` demo fault: it read a standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, ran `mvn -pl target-service test`, passed review, skipped disabled GitHub/Feishu actions safely, and wrote a repair record. A recent local run with `deepseek-v4-flash` completed the full repair loop in about 93 seconds. There is no non-LLM fallback; model configuration or invalid typed model output surfaces as repair `ERROR` events.
+The flow has been verified end to end on the `quantity-division-by-zero` demo fault: it read a standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, ran `mvn -pl target-service test`, passed review, skipped disabled GitHub/Feishu actions safely, and wrote a repair record. Real GitHub PR and Feishu delivery have also been validated manually. There is no non-LLM fallback; model configuration or invalid typed model output surfaces as repair `ERROR` events and writes a minimal error record.
 
 ## Current Implementation Status
 
-- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, LangChain4j `@Description` field hints, controlled patch application, tests, review gates, repair records, repair timing and token observability, demo fault injection, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration.
+- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, typed `RepairReflection`, LangChain4j `@Description` field hints, controlled atomic patch application, tests, review gates, repair records, repair timing and token observability, demo fault injection, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration.
 - Done: deterministic Java DAG implementation under `repair/agentic` with AI sub-agents in `repair/agentic/agents` and non-AI operators in `repair/agentic/operators`.
 - Done: reflexion loop on test failure (rollback + regeneratePatchFromTestFailure with bounded attempts).
 - Done: real GitHub PR creation through REST API (`GitHubRestPullRequestProvider`), with auto-detected owner/repo from the git origin remote.
 - Done: Feishu v2 interactive card with title/summary/timing/token block, "View PR" button, and optional signing-secret support.
-- Disabled by default: Git commit/push, GitHub PR creation, and Feishu notification (toggle with `REPAIR_GIT_ENABLED`, `REPAIR_GITHUB_ENABLED`, `FEISHU_ENABLED`).
+- Disabled by default: LLM repair, Git commit/push, GitHub PR creation, and Feishu notification (toggle with `REPAIR_LLM_ENABLED`, `REPAIR_GIT_ENABLED`, `REPAIR_GITHUB_ENABLED`, `FEISHU_ENABLED`).
 - Next: broaden repair scenarios beyond the first validation bug, add more orchestration-level tests, improve repair record retrieval/knowledge reuse, and add a frontend workbench after the backend flow stays stable.
 
-The current mainline target service is repaired. Use the demo fault injection endpoints to switch it into a known failure state before testing automatic repair.
+The current mainline target service is repaired. Use the demo fault injection endpoints for local replay, or use the committed demo base branch described below for real PR demos.
+
+## Demo PR Branch Model
+
+`main` must stay in the repaired state. For a real PR demo, use a committed faulty base branch instead of injecting a temporary fault on `main`:
+
+```text
+main                                  repaired project state
+demo/fault/quantity-division-by-zero  current main plus the committed division-by-zero fault
+repair/{sessionId}                    Agent-created fix branch targeting the demo fault branch
+```
+
+Set `REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero` when recording the PR demo. This makes the PR diff show only the Agent's repair from the faulty baseline back to the fixed code. The older `repair-demo-target` branch is no longer the primary competition-demo base because it may lag behind `main`.
 
 ## Repair Timing And Token Observability
 
-Repair timing and model usage are implemented without shortening the Agentic workflow. The Supervisor, diagnosis, planning, patch proposal, patch application, tests, review, commit, PR, Feishu notification, reflection, and record writing still run; timing and token data are collected alongside the workflow.
+Repair timing and model usage are implemented without shortening the Agentic workflow. Diagnosis, planning, patch proposal, patch application, tests, review, commit, PR, Feishu notification, reflection, and record writing still run; timing and token data are collected alongside the workflow.
 
 Implemented behavior:
 
@@ -78,15 +90,15 @@ Validation:
 
 ## LangChain4j
 
-LangChain4j is used only for the three AI sub-agents, not for orchestration or file writes:
+LangChain4j is used only for the AI sub-agents, not for orchestration or file writes:
 
-- `RepairChatModelProvider`: lazily builds the configured OpenAI or DashScope `ChatModel`, with role-specific overrides for `diagnosis-model`, `plan-model`, and `patch-model`.
+- `RepairChatModelProvider`: lazily builds the configured OpenAI or DashScope `ChatModel`, with role-specific overrides for `diagnosis-model`, `plan-model`, `patch-model`, and `reflection-model`.
 - `AgenticRepairRunner`: deterministic Java DAG; instantiates each AI sub-agent through `AgenticServices.agentBuilder(...)` and calls them sequentially, no `SupervisorAgent`.
-- `AgenticDiagnosisAgent`, `AgenticPlanAgent`, `AgenticPatchAgent`: return typed records with LangChain4j `@Description` annotations. `AgenticPatchAgent.regeneratePatchFromTestFailure` is the entry point used by the reflexion loop.
+- `AgenticDiagnosisAgent`, `AgenticPlanAgent`, `AgenticPatchAgent`, `AgenticReflectionAgent`: return typed records with LangChain4j `@Description` annotations. Diagnosis, plan, patch, and reflection outputs are validated by Java gates with one retry for invalid typed output.
 - `PatchApplyOperator`: snapshots target files before each apply so the loop can roll back cleanly between attempts.
 - `GitHubRestPullRequestProvider` + `GitRepoLocator`: create the PR via the GitHub REST API and resolve owner/repo from `git remote get-url origin`.
-- `FeishuTools`: builds a Feishu v2 interactive card (header, summary, timing/token block, "View PR" button, footer) with optional HMAC-SHA256 signing.
-- `PatchTools` and `ToolPolicy`: remain the only controlled file-write path.
+- `FeishuTools`: builds a Feishu v2 interactive card (header, summary, timing/token block, "View PR" button, footer) with optional HMAC-SHA256 signing. Successful and failed repair outcomes use different card titles/copy so failed attempts do not claim a fix was completed.
+- `PatchTools` and `ToolPolicy`: remain the only controlled file-write path. Patch application is atomic: every operation is preflighted and every `oldText` must match exactly once before any file is written.
 - AI sub-agents only receive read-only `@Tool` methods; patching, Git, GitHub, and Feishu are non-AI components guarded by existing policies and disabled-mode config.
 
 ## Context Maintenance
@@ -137,17 +149,18 @@ mvn -pl target-service test
 ## Environment
 
 ```text
-REPAIR_LLM_ENABLED=true
+REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_MAX_TOKENS=4096
 REPAIR_LLM_TIMEOUT_SECONDS=90
 REPAIR_LLM_MAX_RETRIES=1
+REPAIR_LLM_REFLECTION_MODEL=
 REPAIR_MAX_PATCH_ATTEMPTS=2
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 REPAIR_GIT_ENABLED=false
 REPAIR_GIT_REMOTE=origin
-REPAIR_BASE_BRANCH=repair-demo-target
+REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero
 REPAIR_GITHUB_ENABLED=false
 REPAIR_GITHUB_CLIENT=rest
 REPAIR_GITHUB_OWNER=
@@ -159,11 +172,13 @@ FEISHU_WEBHOOK_URL=
 FEISHU_SIGNING_SECRET=
 ```
 
-For repair runs, `REPAIR_LLM_ENABLED=true`, either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY`, and a model in local config or environment variables are required. If the model is unavailable or returns invalid typed `DiagnosisResult`/`RepairPlan`/`PatchProposal` objects, the workflow publishes an `ERROR` event instead of using a deterministic fallback. For OpenAI-compatible endpoints such as DeepSeek or Qwen, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher. The DAG trims traceback, source context, and tool event payloads before sending them to the AI sub-agents. The highest-value role-specific override is usually `repair.llm.patch-model`, since the patch agent both generates and rewrites code; `diagnosis-model` and `plan-model` can stay on the default unless faults are ambiguous.
+For repair runs, `REPAIR_LLM_ENABLED=true`, either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY`, and a model in local config or environment variables are required. If the model is unavailable or returns invalid typed `DiagnosisResult`/`RepairPlan`/`PatchProposal`/`RepairReflection` objects twice, the workflow publishes an `ERROR` event and writes a minimal error record instead of using a deterministic fallback. For OpenAI-compatible endpoints such as DeepSeek or Qwen, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher. The DAG trims traceback, source context, and tool event payloads before sending them to the AI sub-agents. The highest-value role-specific override is usually `repair.llm.patch-model`, since the patch agent both generates and rewrites code; `diagnosis-model`, `plan-model`, and `reflection-model` can stay on the default unless faults are ambiguous.
 
-For real PR creation, set `REPAIR_GITHUB_ENABLED=true` and provide `GITHUB_TOKEN` (a fine-grained token with `repo` write scope is enough). Owner/repo are auto-detected from `git remote get-url origin`; override them with `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` when running outside a checkout. The PR base branch defaults to `repair-demo-target`; create that branch on the remote first so each repair PR opens against a stable demo target instead of `main`.
+For real PR creation, set `REPAIR_GITHUB_ENABLED=true` and provide `GITHUB_TOKEN` (a fine-grained token with `repo` write scope is enough). Owner/repo are auto-detected from `git remote get-url origin`; override them with `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` when running outside a checkout. The PR base branch defaults to `demo/fault/quantity-division-by-zero`; create/push that branch from current `main` with only the demo fault committed so each repair PR opens against a clean faulty baseline instead of `main`.
 
 For real Feishu delivery, set `FEISHU_ENABLED=true`, `FEISHU_WEBHOOK_URL`, and (if the bot enforces signature verification) `FEISHU_SIGNING_SECRET`. The card embeds the PR URL as a button and shows total duration plus token usage in a dedicated content block.
+
+Repair records and completed SSE events include `outcome=FIXED|FAILED|ERROR` and `outcomeReason`. Controlled failures such as patch/test/review/PR failure complete with `outcome=FAILED`; runtime workflow exceptions publish `ERROR` and write a minimal error record.
 
 ## Local Profile
 
@@ -185,7 +200,7 @@ agent-platform/src/main/resources/application-local.yml
 mvn -pl agent-platform spring-boot:run
 ```
 
-To test the Agentic Supervisor locally, keep the key only in `application-local.yml` or environment variables and set:
+To test the Agentic workflow locally, keep the key only in `application-local.yml` or environment variables and set:
 
 ```yaml
 repair:
@@ -207,6 +222,7 @@ repair:
     enabled: true
     provider: openai
     patch-model: deepseek-v4-flash
+    reflection-model: deepseek-v4-flash
 ```
 
 ## Demo Fault Injection

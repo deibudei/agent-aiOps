@@ -4,5 +4,6 @@ package org.example.agentaiops.llm;
 public enum RepairModelRole {
     DIAGNOSIS,
     PLAN,
-    PATCH
+    PATCH,
+    REFLECTION
 }

@@ -16,6 +16,7 @@ import org.example.agentaiops.repair.model.PatchResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
 import org.example.agentaiops.repair.model.RepairExecutionResult;
 import org.example.agentaiops.repair.model.RepairModelUsage;
+import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairReflection;
 import org.example.agentaiops.repair.model.RepairStepResult;
@@ -47,9 +48,10 @@ public final class AgenticRepairState {
     public NotificationResult notificationResult;
     public RepairReflection reflection;
     public String diff;
-    public String supervisorSummary;
     public int patchAttempts;
     public boolean recordWritten;
+    public RepairOutcome outcome;
+    public String outcomeReason;
 
     public AgenticRepairState(String sessionId, Instant startedAt) {
         this.sessionId = sessionId;
@@ -58,6 +60,8 @@ public final class AgenticRepairState {
         this.gitCommitResult = new GitCommitResult(false, "", "", "Agent did not run commit step");
         this.pullRequestResult = new PullRequestResult(false, "", "Agent did not run PR step");
         this.notificationResult = new NotificationResult(false, "Agent did not run notification step");
+        this.outcome = RepairOutcome.FAILED;
+        this.outcomeReason = "Repair workflow did not reach a final outcome";
     }
 
     public RepairExecutionResult execution() {
@@ -100,6 +104,11 @@ public final class AgenticRepairState {
 
     public RepairTiming timing() {
         return timingCollector.snapshot();
+    }
+
+    public void markOutcome(RepairOutcome outcome, String reason) {
+        this.outcome = outcome;
+        this.outcomeReason = reason == null || reason.isBlank() ? outcome.name() : reason;
     }
 
     /** Records a stack of file snapshots so the most recent apply can be rolled back. */

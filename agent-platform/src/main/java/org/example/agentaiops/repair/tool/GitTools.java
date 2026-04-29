@@ -70,49 +70,48 @@ public class GitTools {
         String safeTarget = repairTarget == null || repairTarget.isBlank() ? "target-service repair" : repairTarget;
         String commitMessage = "fix(repair): " + safeTarget;
         String baseBranch = properties.getGit().getBaseBranch();
-        List<String> failures = new ArrayList<>();
 
         if (hasText(baseBranch)) {
             CommandResult fetch = runGit("fetch", properties.getGit().getRemote(), baseBranch);
             if (!fetch.success()) {
-                failures.add(fetch.output());
+                return failed(branchName, commitMessage, fetch);
             }
             CommandResult checkoutBase = runGit("checkout", baseBranch);
             if (!checkoutBase.success()) {
                 CommandResult checkoutFromRemote = runGit(
                         "checkout", "-B", baseBranch, properties.getGit().getRemote() + "/" + baseBranch);
                 if (!checkoutFromRemote.success()) {
-                    failures.add(checkoutBase.output());
-                    failures.add(checkoutFromRemote.output());
+                    return new GitCommitResult(false, branchName, commitMessage,
+                            checkoutBase.output() + System.lineSeparator() + checkoutFromRemote.output());
                 }
             }
         }
 
         CommandResult checkout = runGit("checkout", "-b", branchName);
         if (!checkout.success()) {
-            failures.add(checkout.output());
+            return failed(branchName, commitMessage, checkout);
         }
 
         CommandResult add = runGit("add", "target-service");
         if (!add.success()) {
-            failures.add(add.output());
+            return failed(branchName, commitMessage, add);
         }
 
         CommandResult commit = runGit("commit", "-m", commitMessage);
         if (!commit.success()) {
-            failures.add(commit.output());
+            return failed(branchName, commitMessage, commit);
         }
 
         CommandResult push = runGit("push", "-u", properties.getGit().getRemote(), branchName);
         if (!push.success()) {
-            failures.add(push.output());
-        }
-
-        if (!failures.isEmpty()) {
-            return new GitCommitResult(false, branchName, commitMessage, String.join(System.lineSeparator(), failures));
+            return failed(branchName, commitMessage, push);
         }
 
         return new GitCommitResult(true, branchName, commitMessage, "Branch pushed");
+    }
+
+    private GitCommitResult failed(String branchName, String commitMessage, CommandResult commandResult) {
+        return new GitCommitResult(false, branchName, commitMessage, commandResult.output());
     }
 
     private static boolean hasText(String value) {

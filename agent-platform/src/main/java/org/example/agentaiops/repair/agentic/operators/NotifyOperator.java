@@ -2,6 +2,8 @@ package org.example.agentaiops.repair.agentic.operators;
 
 import java.util.Map;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
+import org.example.agentaiops.repair.model.NotificationResult;
+import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.tool.FeishuTools;
@@ -20,6 +22,11 @@ public final class NotifyOperator {
     }
 
     public String sendNotification() {
+        if (state.outcome == RepairOutcome.ERROR) {
+            state.notificationResult = new NotificationResult(true, "Feishu skipped for ERROR outcome");
+            state.step("FeishuTools", state.sessionId, state.notificationResult.message(), true);
+            return state.notificationResult.message();
+        }
         eventHub.publish(state.sessionId, RepairStage.NOTIFIED, "Sending Feishu notification");
         String repairTarget = state.plan == null || state.plan.repairTarget() == null
                 ? "target-service repair"
@@ -32,6 +39,8 @@ public final class NotifyOperator {
                 : state.reviewDecision.reason();
         state.notificationResult = feishuTools.sendRepairCard(
                 state.sessionId,
+                state.outcome,
+                state.outcomeReason,
                 repairTarget,
                 rootCause,
                 reviewReason,

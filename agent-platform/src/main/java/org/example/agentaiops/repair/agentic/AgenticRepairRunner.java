@@ -3,16 +3,17 @@ package org.example.agentaiops.repair.agentic;
 import dev.langchain4j.agentic.AgenticServices;
 import java.time.Instant;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.llm.RepairChatModelProvider;
 import org.example.agentaiops.llm.RepairModelRole;
 import org.example.agentaiops.repair.agent.EvidenceAgent;
-import org.example.agentaiops.repair.agent.RepairReflectionAgent;
 import org.example.agentaiops.repair.agent.RepairReviewerAgent;
 import org.example.agentaiops.repair.agentic.agents.AgenticDiagnosisAgent;
 import org.example.agentaiops.repair.agentic.agents.AgenticPatchAgent;
 import org.example.agentaiops.repair.agentic.agents.AgenticPatchRegenerationAgent;
 import org.example.agentaiops.repair.agentic.agents.AgenticPlanAgent;
+import org.example.agentaiops.repair.agentic.agents.AgenticReflectionAgent;
 import org.example.agentaiops.repair.agentic.operators.CommitOperator;
 import org.example.agentaiops.repair.agentic.operators.EvidenceOperator;
 import org.example.agentaiops.repair.agentic.operators.NotifyOperator;
@@ -27,6 +28,8 @@ import org.example.agentaiops.repair.agentic.operators.SourceContextOperator;
 import org.example.agentaiops.repair.agentic.operators.TestOperator;
 import org.example.agentaiops.repair.model.DiagnosisResult;
 import org.example.agentaiops.repair.model.PatchProposal;
+import org.example.agentaiops.repair.model.PullRequestResult;
+import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.model.ReviewStatus;
@@ -43,7 +46,7 @@ import org.example.agentaiops.repair.tool.RunTestTools;
 import org.example.agentaiops.repair.tool.ToolPolicy;
 import org.springframework.stereotype.Component;
 
-/** Runs the deterministic Java repair DAG with three LangChain4j AI sub-agents. */
+/** Runs the deterministic Java repair DAG with LangChain4j AI sub-agents. */
 @Component
 public class AgenticRepairRunner {
 
@@ -58,7 +61,6 @@ public class AgenticRepairRunner {
     private final ToolPolicy toolPolicy;
     private final RunTestTools runTestTools;
     private final RepairReviewerAgent reviewerAgent;
-    private final RepairReflectionAgent reflectionAgent;
     private final GitTools gitTools;
     private final GitHubTools gitHubTools;
     private final FeishuTools feishuTools;
@@ -76,7 +78,6 @@ public class AgenticRepairRunner {
             ToolPolicy toolPolicy,
             RunTestTools runTestTools,
             RepairReviewerAgent reviewerAgent,
-            RepairReflectionAgent reflectionAgent,
             GitTools gitTools,
             GitHubTools gitHubTools,
             FeishuTools feishuTools,
@@ -91,7 +92,6 @@ public class AgenticRepairRunner {
         this.toolPolicy = toolPolicy;
         this.runTestTools = runTestTools;
         this.reviewerAgent = reviewerAgent;
-        this.reflectionAgent = reflectionAgent;
         this.gitTools = gitTools;
         this.gitHubTools = gitHubTools;
         this.feishuTools = feishuTools;
@@ -142,6 +142,11 @@ public class AgenticRepairRunner {
                 .tools(readOnlyTools)
                 .listener(listener)
                 .build();
+        AgenticReflectionAgent reflectionAgent = AgenticServices.agentBuilder(AgenticReflectionAgent.class)
+                .chatModel(chatModelProvider.chatModel(RepairModelRole.REFLECTION))
+                .tools(readOnlyTools)
+                .listener(listener)
+                .build();
 
         EvidenceOperator evidenceOperator = new EvidenceOperator(state, evidenceAgent, eventHub);
         PlanParserOperator planParserOperator = new PlanParserOperator(state, eventHub);
@@ -160,11 +165,10 @@ public class AgenticRepairRunner {
 
         evidenceOperator.collectEvidence();
 
-        DiagnosisResult diagnosis = diagnosisAgent.diagnoseRootCause(state.evidence);
+        DiagnosisResult diagnosis = diagnoseWithOneRetry(diagnosisAgent, state);
         state.diagnosis = diagnosis;
 
-        RepairPlan plan = planAgent.generateRepairPlan(state.evidence, diagnosis);
-        planParserOperator.parseRepairPlan(plan);
+        planWithOneRetry(planAgent, planParserOperator, state, diagnosis);
 
         sourceContextOperator.prepareSourceContext(state.evidence, state.plan);
 
@@ -175,8 +179,15 @@ public class AgenticRepairRunner {
 
         if (state.reviewDecision != null && state.reviewDecision.status() == ReviewStatus.PASS) {
             commitOperator.commitRepair();
-            pullRequestOperator.createPullRequest();
+            if (gitFailureShouldFailRun(state)) {
+                state.markOutcome(RepairOutcome.FAILED, state.gitCommitResult.message());
+            } else {
+                pullRequestOperator.createPullRequest();
+                state.markOutcome(outcomeAfterPr(state), outcomeReasonAfterPr(state));
+            }
         } else {
+            state.markOutcome(RepairOutcome.FAILED,
+                    state.reviewDecision == null ? "Review did not produce a decision" : state.reviewDecision.reason());
             eventHub.publish(sessionId, RepairStage.COMMITTING,
                     "Skipping commit/PR because review did not pass");
         }
@@ -195,6 +206,8 @@ public class AgenticRepairRunner {
                         "mode", "java-dag",
                         "stepName", "repairWorkflow",
                         "durationMillis", durationMillis,
+                        "outcome", state.outcome,
+                        "outcomeReason", state.outcomeReason,
                         "patchAttempts", state.patchAttempts,
                         "modelUsage", timing.modelUsage()));
     }
@@ -215,17 +228,25 @@ public class AgenticRepairRunner {
             state.patchAttempts = attempt;
             PatchProposal proposal;
             if (attempt == 1) {
-                proposal = patchAgent.generatePatchProposal(state.plan, state.sourceContext);
+                proposal = patchWithOneRetry(
+                        () -> patchAgent.generatePatchProposal(state.plan, state.sourceContext),
+                        patchParserOperator,
+                        state);
             } else {
                 eventHub.publish(state.sessionId, RepairStage.PATCHING,
                         "Reflexion attempt " + attempt + ": regenerating patch from test stderr");
-                proposal = patchRegenerationAgent.regeneratePatchFromTestFailure(
-                        state.plan,
-                        state.sourceContext,
-                        previousProposal,
-                        AgenticEvidenceFormatter.trim(testStderr(lastTestResult), TEST_STDERR_PROMPT_CHARS));
+                PatchProposal failedProposal = previousProposal;
+                String trimmedTestFailure =
+                        AgenticEvidenceFormatter.trim(testStderr(lastTestResult), TEST_STDERR_PROMPT_CHARS);
+                proposal = patchWithOneRetry(
+                        () -> patchRegenerationAgent.regeneratePatchFromTestFailure(
+                                state.plan,
+                                state.sourceContext,
+                                failedProposal,
+                                trimmedTestFailure),
+                        patchParserOperator,
+                        state);
             }
-            patchParserOperator.parsePatchProposal(proposal);
             previousProposal = state.patchProposal;
 
             patchApplyOperator.applyPatchProposal(state.patchProposal);
@@ -262,12 +283,121 @@ public class AgenticRepairRunner {
         return sb.toString();
     }
 
+    private DiagnosisResult diagnoseWithOneRetry(AgenticDiagnosisAgent diagnosisAgent, AgenticRepairState state) {
+        RuntimeException firstFailure = null;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                DiagnosisResult diagnosis = diagnosisAgent.diagnoseRootCause(state.evidence);
+                validateDiagnosis(diagnosis);
+                return diagnosis;
+            } catch (RuntimeException e) {
+                firstFailure = e;
+                eventHub.publish(state.sessionId, RepairStage.PLANNING,
+                        "Diagnosis output invalid on attempt " + attempt + ": " + e.getMessage());
+            }
+        }
+        throw firstFailure;
+    }
+
+    private void planWithOneRetry(
+            AgenticPlanAgent planAgent,
+            PlanParserOperator planParserOperator,
+            AgenticRepairState state,
+            DiagnosisResult diagnosis) {
+        RuntimeException firstFailure = null;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                RepairPlan plan = planAgent.generateRepairPlan(state.evidence, diagnosis);
+                planParserOperator.parseRepairPlan(plan);
+                return;
+            } catch (RuntimeException e) {
+                firstFailure = e;
+                eventHub.publish(state.sessionId, RepairStage.PLANNING,
+                        "RepairPlan output invalid on attempt " + attempt + ": " + e.getMessage());
+            }
+        }
+        throw firstFailure;
+    }
+
+    private PatchProposal patchWithOneRetry(
+            Supplier<PatchProposal> proposalSupplier,
+            PatchParserOperator patchParserOperator,
+            AgenticRepairState state) {
+        RuntimeException firstFailure = null;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                return patchParserOperator.parsePatchProposal(proposalSupplier.get());
+            } catch (RuntimeException e) {
+                firstFailure = e;
+                eventHub.publish(state.sessionId, RepairStage.PATCHING,
+                        "PatchProposal output invalid on attempt " + attempt + ": " + e.getMessage());
+            }
+        }
+        throw firstFailure;
+    }
+
+    private void validateDiagnosis(DiagnosisResult diagnosis) {
+        if (diagnosis == null) {
+            throw new IllegalStateException("Agentic diagnosis output was not a DiagnosisResult");
+        }
+        requireDiagnosisText(diagnosis.failureSignal(), "failureSignal");
+        requireDiagnosisText(diagnosis.primaryEvidence(), "primaryEvidence");
+        requireDiagnosisText(diagnosis.rootCause(), "rootCause");
+        requireDiagnosisText(diagnosis.violatedContract(), "violatedContract");
+        if (diagnosis.suspectedFiles() == null || diagnosis.suspectedFiles().isEmpty()) {
+            throw new IllegalStateException("DiagnosisResult suspectedFiles must not be empty");
+        }
+        if (diagnosis.confidence() < 0.0 || diagnosis.confidence() > 1.0) {
+            throw new IllegalStateException("DiagnosisResult confidence must be between 0.0 and 1.0");
+        }
+        for (String file : diagnosis.suspectedFiles()) {
+            requireDiagnosisText(file, "suspectedFiles");
+            if (!file.startsWith("target-service/src/main/") && !file.startsWith("target-service/src/test/")) {
+                throw new IllegalStateException("DiagnosisResult suspected file is outside target-service src: " + file);
+            }
+        }
+    }
+
+    private void requireDiagnosisText(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("DiagnosisResult " + fieldName + " is required");
+        }
+    }
+
+    private boolean gitFailureShouldFailRun(AgenticRepairState state) {
+        return properties.getGit().isEnabled()
+                && state.gitCommitResult != null
+                && !state.gitCommitResult.success();
+    }
+
+    private RepairOutcome outcomeAfterPr(AgenticRepairState state) {
+        if (properties.getGithub().isEnabled()) {
+            PullRequestResult result = state.pullRequestResult;
+            return result != null && result.success() && result.url() != null && !result.url().isBlank()
+                    ? RepairOutcome.FIXED
+                    : RepairOutcome.FAILED;
+        }
+        return RepairOutcome.FIXED;
+    }
+
+    private String outcomeReasonAfterPr(AgenticRepairState state) {
+        if (properties.getGithub().isEnabled()) {
+            PullRequestResult result = state.pullRequestResult;
+            if (result != null && result.success() && result.url() != null && !result.url().isBlank()) {
+                return "Patch passed review and PR was created: " + result.url();
+            }
+            return result == null ? "GitHub PR did not run" : result.message();
+        }
+        return "Patch passed review and GitHub PR creation is disabled";
+    }
+
     private Map<String, String> roleByAgent() {
         return Map.of(
                 "diagnoseRootCause", RepairModelRole.DIAGNOSIS.name(),
                 "generateRepairPlan", RepairModelRole.PLAN.name(),
                 "generatePatchProposal", RepairModelRole.PATCH.name(),
-                "regeneratePatchProposal", RepairModelRole.PATCH.name());
+                "regeneratePatchProposal", RepairModelRole.PATCH.name(),
+                "reflectRepair", RepairModelRole.REFLECTION.name());
     }
 
     private Map<String, String> modelByAgent() {
@@ -275,6 +405,7 @@ public class AgenticRepairRunner {
                 "diagnoseRootCause", chatModelProvider.modelName(RepairModelRole.DIAGNOSIS),
                 "generateRepairPlan", chatModelProvider.modelName(RepairModelRole.PLAN),
                 "generatePatchProposal", chatModelProvider.modelName(RepairModelRole.PATCH),
-                "regeneratePatchProposal", chatModelProvider.modelName(RepairModelRole.PATCH));
+                "regeneratePatchProposal", chatModelProvider.modelName(RepairModelRole.PATCH),
+                "reflectRepair", chatModelProvider.modelName(RepairModelRole.REFLECTION));
     }
 }

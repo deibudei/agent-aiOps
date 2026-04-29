@@ -12,6 +12,7 @@ import org.example.agentaiops.repair.model.GitCommitResult;
 import org.example.agentaiops.repair.model.NotificationResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
 import org.example.agentaiops.repair.model.RepairModelUsage;
+import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairReflection;
@@ -41,16 +42,34 @@ class RepairRecordToolsTest {
         String json = Files.readString(tempDir.resolve("repair-records/timing-session.json"));
         String markdown = Files.readString(tempDir.resolve("repair-records/timing-session.md"));
         assertThat(json).contains("\"timing\"");
+        assertThat(json).contains("\"outcome\" : \"FIXED\"");
         assertThat(json).contains("\"durationMillis\" : 1234");
         assertThat(json).contains("\"modelUsage\"");
         assertThat(json).contains("\"totalTokenCount\" : 120");
         assertThat(markdown).contains("## Timing");
+        assertThat(markdown).contains("- Outcome: FIXED");
         assertThat(markdown).contains("## Model Usage");
         assertThat(markdown).contains("| collectEvidence | 10 | true |");
         assertThat(markdown).contains("| generateRepairPlan | PLAN | deepseek-v4-flash |");
     }
 
+    @Test
+    void rejectsUnsafeSessionIdForRecordPaths() {
+        RepairProperties properties = new RepairProperties();
+        properties.setWorkspaceRoot(tempDir.toString());
+        RepairRecordTools tools = new RepairRecordTools(new ToolPolicy(properties), new ObjectMapper());
+
+        ToolExecutionResult result = tools.writeRecord(recordWithTiming("..\\escape"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.error()).contains("Invalid sessionId");
+    }
+
     private RepairRecord recordWithTiming() {
+        return recordWithTiming("timing-session");
+    }
+
+    private RepairRecord recordWithTiming(String sessionId) {
         Instant started = Instant.parse("2026-04-27T09:00:00Z");
         RepairTiming timing = new RepairTiming(
                 started,
@@ -74,9 +93,11 @@ class RepairRecordToolsTest {
                         120)));
         return new RepairRecord(
                 1,
-                "timing-session",
+                sessionId,
                 started,
                 started.plusMillis(1234),
+                RepairOutcome.FIXED,
+                "Patch passed review and PR was created",
                 null,
                 "traceback",
                 new RepairPlan(

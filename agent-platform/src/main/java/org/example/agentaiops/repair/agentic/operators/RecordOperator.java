@@ -65,6 +65,8 @@ public final class RecordOperator {
                 state.sessionId,
                 state.startedAt,
                 Instant.now(),
+                state.outcome,
+                state.outcomeReason,
                 state.evidenceBundle,
                 AgenticEvidenceFormatter.trim(state.evidence, 3000),
                 state.plan,

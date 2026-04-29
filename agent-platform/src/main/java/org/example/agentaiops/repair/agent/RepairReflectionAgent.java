@@ -16,20 +16,20 @@ public class RepairReflectionAgent {
             String evidence, RepairPlan plan, RepairExecutionResult executionResult, ReviewDecision reviewDecision) {
         boolean passed = reviewDecision.status() == ReviewStatus.PASS;
         String testCoverage = executionResult.testResult().success()
-                ? "JUnit covered valid quote calculation and zero quantity rejection."
+                ? "Configured target-service tests passed after the attempted repair."
                 : "Tests did not pass; inspect Maven output before committing.";
         return new RepairReflection(
                 plan.rootCauseHypothesis(),
                 summarizeEvidence(evidence),
                 passed
-                        ? "Added explicit input validation before the risky arithmetic operation."
-                        : "Attempted targeted validation repair, but review did not allow commit.",
+                        ? "Applied the planned target-service change and passed review."
+                        : "Attempted the planned target-service change, but review did not allow commit.",
                 testCoverage,
                 passed
-                        ? "For parameter validation bugs, check boundary values before arithmetic or persistence."
+                        ? "Keep future repairs tied to the failing evidence, narrow diff, and passing regression tests."
                         : "When repair fails, compare traceback, diff, and failing tests before retrying.",
                 List.of(
-                        "Search for similar arithmetic operations without boundary checks.",
+                        "Search for files that share the same failing contract or stack-frame pattern.",
                         "Add regression tests for each recovered traceback.",
                         "Keep repair writes limited to the affected service module."));
     }

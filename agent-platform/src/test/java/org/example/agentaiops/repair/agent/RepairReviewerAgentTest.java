@@ -44,6 +44,31 @@ class RepairReviewerAgentTest {
         assertThat(decision.reason()).contains("No target-service diff");
     }
 
+    @Test
+    void rejectsWhenTestsDidNotRun() {
+        GitTools gitTools = mock(GitTools.class);
+        ReviewPolicy reviewPolicy = mock(ReviewPolicy.class);
+        when(gitTools.changedTargetFiles()).thenReturn(List.of());
+        RepairReviewerAgent reviewerAgent = new RepairReviewerAgent(gitTools, reviewPolicy);
+
+        PatchResult patchResult = new PatchResult(
+                true,
+                "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
+                "Patch applied");
+        PatchApplicationResult applicationResult =
+                new PatchApplicationResult(true, List.of(patchResult), "Patch proposal applied");
+
+        var decision = reviewerAgent.review(new RepairExecutionResult(
+                List.of(),
+                null,
+                patchResult,
+                null,
+                applicationResult));
+
+        assertThat(decision.status()).isEqualTo(ReviewStatus.REJECT);
+        assertThat(decision.reason()).contains("tests did not run");
+    }
+
     private RepairExecutionResult executionResult(String oldText, String newText) {
         PatchProposal proposal = new PatchProposal(
                 "target",

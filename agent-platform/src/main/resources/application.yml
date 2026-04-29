@@ -34,24 +34,25 @@ repair:
   git:
     enabled: ${REPAIR_GIT_ENABLED:false}
     remote: ${REPAIR_GIT_REMOTE:origin}
-    base-branch: ${REPAIR_BASE_BRANCH:repair-demo-target}
+    base-branch: ${REPAIR_BASE_BRANCH:demo/fault/quantity-division-by-zero}
   github:
-    enabled: ${REPAIR_GITHUB_ENABLED:true}
+    enabled: ${REPAIR_GITHUB_ENABLED:false}
     client: ${REPAIR_GITHUB_CLIENT:rest}
     token: ${GITHUB_TOKEN:}
     owner: ${REPAIR_GITHUB_OWNER:}
     repo: ${REPAIR_GITHUB_REPO:}
     api-base-url: ${REPAIR_GITHUB_API_BASE_URL:https://api.github.com}
   feishu:
-    enabled: ${FEISHU_ENABLED:true}
+    enabled: ${FEISHU_ENABLED:false}
     webhook-url: ${FEISHU_WEBHOOK_URL:}
     signing-secret: ${FEISHU_SIGNING_SECRET:}
   llm:
-    enabled: ${REPAIR_LLM_ENABLED:true}
+    enabled: ${REPAIR_LLM_ENABLED:false}
     provider: ${REPAIR_LLM_PROVIDER:openai}
     temperature: ${REPAIR_LLM_TEMPERATURE:0.1}
     max-tokens: ${REPAIR_LLM_MAX_TOKENS:4096}
     timeout-seconds: ${REPAIR_LLM_TIMEOUT_SECONDS:180}
     max-retries: ${REPAIR_LLM_MAX_RETRIES:1}
+    reflection-model: ${REPAIR_LLM_REFLECTION_MODEL:}
   agentic:
     file-read-cache-enabled: ${REPAIR_AGENTIC_FILE_READ_CACHE_ENABLED:true}

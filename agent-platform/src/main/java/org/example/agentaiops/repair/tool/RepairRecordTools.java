@@ -5,6 +5,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.regex.Pattern;
 import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairStepTiming;
@@ -13,6 +14,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class RepairRecordTools {
+
+    private static final Pattern SAFE_SESSION_ID = Pattern.compile("[A-Za-z0-9._-]{1,80}");
 
     private final ToolPolicy toolPolicy;
     private final ObjectMapper objectMapper;
@@ -28,13 +31,14 @@ public class RepairRecordTools {
         try {
             Path recordsDir = toolPolicy.workspaceRoot().resolve("repair-records").normalize();
             Files.createDirectories(recordsDir);
-            Path jsonPath = recordsDir.resolve(record.sessionId() + ".json");
-            Path mdPath = recordsDir.resolve(record.sessionId() + ".md");
+            String safeSessionId = safeSessionId(record.sessionId());
+            Path jsonPath = ensureUnderRecords(recordsDir, recordsDir.resolve(safeSessionId + ".json"));
+            Path mdPath = ensureUnderRecords(recordsDir, recordsDir.resolve(safeSessionId + ".md"));
 
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(jsonPath.toFile(), record);
             Files.writeString(mdPath, toMarkdown(record));
             return ToolExecutionResult.success("Wrote " + jsonPath + " and " + mdPath);
-        } catch (IOException e) {
+        } catch (IOException | IllegalArgumentException e) {
             return ToolExecutionResult.failure(e.getMessage());
         }
     }
@@ -48,6 +52,8 @@ public class RepairRecordTools {
                 - Session: %s
                 - Started: %s
                 - Completed: %s
+                - Outcome: %s
+                - Outcome reason: %s
                 - PR: %s
                 - Duration: %s ms
 
@@ -94,6 +100,8 @@ public class RepairRecordTools {
                 record.sessionId(),
                 record.startedAt(),
                 record.completedAt(),
+                record.outcome(),
+                record.outcomeReason(),
                 pr,
                 record.timing() == null ? "n/a" : record.timing().durationMillis(),
                 record.tracebackSummary(),
@@ -182,6 +190,22 @@ public class RepairRecordTools {
 
     private String numberCell(Integer value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private String safeSessionId(String sessionId) {
+        if (sessionId == null || !SAFE_SESSION_ID.matcher(sessionId).matches()) {
+            throw new IllegalArgumentException("Invalid sessionId for repair record: " + sessionId);
+        }
+        return sessionId;
+    }
+
+    private Path ensureUnderRecords(Path recordsDir, Path path) {
+        Path normalizedRecordsDir = recordsDir.toAbsolutePath().normalize();
+        Path normalizedPath = path.toAbsolutePath().normalize();
+        if (!normalizedPath.startsWith(normalizedRecordsDir)) {
+            throw new IllegalArgumentException("Repair record path escapes repair-records: " + normalizedPath);
+        }
+        return normalizedPath;
     }
 
     private String markdownCell(String value) {

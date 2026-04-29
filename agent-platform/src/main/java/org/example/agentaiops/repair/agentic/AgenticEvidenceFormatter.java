@@ -3,7 +3,7 @@ package org.example.agentaiops.repair.agentic;
 import org.example.agentaiops.repair.model.EvidenceBundle;
 import org.example.agentaiops.repair.model.SourceSnippet;
 
-/** Builds bounded prompt context for the Agentic supervisor and sub-agents. */
+/** Builds bounded prompt context for the deterministic DAG and AI sub-agents. */
 public final class AgenticEvidenceFormatter {
 
     public static final int AGENTIC_TRACEBACK_CHARS = 2500;

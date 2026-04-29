@@ -128,8 +128,17 @@ public class RepairChatModelProvider {
             case DIAGNOSIS -> properties.getLlm().getDiagnosisModel();
             case PLAN -> properties.getLlm().getPlanModel();
             case PATCH -> properties.getLlm().getPatchModel();
+            case REFLECTION -> reflectionModelOverride();
         };
         return hasText(override) ? override.trim() : defaultModel;
+    }
+
+    private String reflectionModelOverride() {
+        String reflectionModel = properties.getLlm().getReflectionModel();
+        if (hasText(reflectionModel)) {
+            return reflectionModel;
+        }
+        return properties.getLlm().getPlanModel();
     }
 
     /** Checks whether a provider configuration value is present. */

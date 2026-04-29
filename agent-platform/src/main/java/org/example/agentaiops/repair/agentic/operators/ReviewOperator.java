@@ -6,6 +6,7 @@ import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.model.ReviewDecision;
 import org.example.agentaiops.repair.model.ReviewStatus;
+import org.example.agentaiops.repair.model.TestExecutionResult;
 import org.example.agentaiops.repair.service.RepairEventHub;
 
 /** Reviews patch, diff, and test result before external actions. */
@@ -22,6 +23,14 @@ public final class ReviewOperator {
     }
 
     public ReviewDecision reviewRepair() {
+        if (state.testResult == null) {
+            state.testResult = new TestExecutionResult(
+                    1,
+                    "",
+                    "Target-service tests were not run before review.",
+                    0,
+                    false);
+        }
         state.execution = state.execution();
         eventHub.publish(state.sessionId, RepairStage.REVIEWING, "Reviewing diff and test result");
         state.reviewDecision = reviewerAgent.review(state.execution);

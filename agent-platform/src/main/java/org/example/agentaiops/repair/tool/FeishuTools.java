@@ -19,6 +19,7 @@ import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.repair.model.NotificationResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
 import org.example.agentaiops.repair.model.RepairModelUsage;
+import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairTiming;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -48,6 +49,8 @@ public class FeishuTools {
     /** Sends a v2 interactive card with repair target, PR link, timing, and token usage. */
     public NotificationResult sendRepairCard(
             String sessionId,
+            RepairOutcome outcome,
+            String outcomeReason,
             String repairTarget,
             String rootCause,
             String reviewReason,
@@ -62,7 +65,8 @@ public class FeishuTools {
         }
 
         try {
-            String payload = buildPayload(sessionId, repairTarget, rootCause, reviewReason, pullRequestResult, timing);
+            String payload = buildPayload(
+                    sessionId, outcome, outcomeReason, repairTarget, rootCause, reviewReason, pullRequestResult, timing);
             HttpRequest request = HttpRequest.newBuilder(URI.create(webhookUrl))
                     .header("Content-Type", "application/json; charset=utf-8")
                     .timeout(Duration.ofSeconds(5))
@@ -85,6 +89,8 @@ public class FeishuTools {
     /** Builds the v2 interactive Feishu card payload. */
     private String buildPayload(
             String sessionId,
+            RepairOutcome outcome,
+            String outcomeReason,
             String repairTarget,
             String rootCause,
             String reviewReason,
@@ -96,15 +102,17 @@ public class FeishuTools {
         Map<String, Object> card = new LinkedHashMap<>();
         card.put("config", Map.of("wide_screen_mode", true));
         card.put("header", Map.of(
-                "template", "green",
-                "title", Map.of("tag", "plain_text", "content", "自动修复完成 · 请 Review")));
+                "template", headerTemplate(outcome),
+                "title", Map.of("tag", "plain_text", "content", headerTitle(outcome))));
 
         List<Map<String, Object>> elements = new ArrayList<>();
         elements.add(Map.of(
                 "tag", "div",
                 "text", Map.of(
                         "tag", "lark_md",
-                        "content", buildSummaryText(sessionId, repairTarget, rootCause, reviewReason, prUrl, prMessage))));
+                        "content", buildSummaryText(
+                                sessionId, outcome, outcomeReason, repairTarget, rootCause,
+                                reviewReason, prUrl, prMessage))));
         elements.add(Map.of(
                 "tag", "div",
                 "text", Map.of(
@@ -135,13 +143,21 @@ public class FeishuTools {
 
     private String buildSummaryText(
             String sessionId,
+            RepairOutcome outcome,
+            String outcomeReason,
             String repairTarget,
             String rootCause,
             String reviewReason,
             String prUrl,
             String prMessage) {
         StringBuilder sb = new StringBuilder();
-        sb.append("**我发现了一个 Bug 并已为您修复，请 Review。**\n");
+        if (outcome == RepairOutcome.FIXED) {
+            sb.append("**我发现了一个 Bug 并已为您修复，请 Review。**\n");
+        } else {
+            sb.append("**自动修复未完成，需要人工介入。**\n");
+        }
+        sb.append("- 结果：").append(outcome == null ? "UNKNOWN" : outcome.name()).append('\n');
+        sb.append("- 原因：").append(emptyDash(outcomeReason)).append('\n');
         sb.append("- 修复目标：").append(emptyDash(repairTarget)).append('\n');
         sb.append("- 根因：").append(emptyDash(rootCause)).append('\n');
         sb.append("- Review：").append(emptyDash(reviewReason)).append('\n');
@@ -152,6 +168,26 @@ public class FeishuTools {
         }
         sb.append("- Session：`").append(sessionId).append('`');
         return sb.toString();
+    }
+
+    private String headerTemplate(RepairOutcome outcome) {
+        if (outcome == RepairOutcome.FIXED) {
+            return "green";
+        }
+        if (outcome == RepairOutcome.FAILED) {
+            return "red";
+        }
+        return "grey";
+    }
+
+    private String headerTitle(RepairOutcome outcome) {
+        if (outcome == RepairOutcome.FIXED) {
+            return "自动修复完成 · 请 Review";
+        }
+        if (outcome == RepairOutcome.FAILED) {
+            return "自动修复未完成 · 需人工介入";
+        }
+        return "自动修复异常";
     }
 
     private String buildTimingText(RepairTiming timing) {

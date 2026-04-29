@@ -102,7 +102,7 @@ class GitHubRestPullRequestProviderTest {
         RepairProperties properties = new RepairProperties();
         properties.getGithub().setToken(token);
         properties.getGithub().setClient("rest");
-        properties.getGit().setBaseBranch("repair-demo-target");
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
         return properties;
     }
 }

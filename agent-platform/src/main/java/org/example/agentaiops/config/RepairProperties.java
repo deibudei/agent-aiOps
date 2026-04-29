@@ -180,7 +180,7 @@ public class RepairProperties {
     public static class Git {
         private boolean enabled;
         private String remote = "origin";
-        private String baseBranch = "main";
+        private String baseBranch = "demo/fault/quantity-division-by-zero";
 
         /** Returns whether local Git automation is enabled. */
         public boolean isEnabled() {
@@ -328,6 +328,7 @@ public class RepairProperties {
         private String diagnosisModel = "";
         private String planModel = "";
         private String patchModel = "";
+        private String reflectionModel = "";
 
         /** Returns whether LLM planning and patch proposal are enabled. */
         public boolean isEnabled() {
@@ -417,6 +418,16 @@ public class RepairProperties {
         /** Updates the optional model override for patch proposal generation. */
         public void setPatchModel(String patchModel) {
             this.patchModel = patchModel;
+        }
+
+        /** Returns the optional model override for post-repair reflection. */
+        public String getReflectionModel() {
+            return reflectionModel;
+        }
+
+        /** Updates the optional model override for post-repair reflection. */
+        public void setReflectionModel(String reflectionModel) {
+            this.reflectionModel = reflectionModel;
         }
     }
 

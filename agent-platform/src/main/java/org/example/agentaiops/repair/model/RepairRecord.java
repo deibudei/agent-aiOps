@@ -9,6 +9,8 @@ public record RepairRecord(
         String sessionId,
         Instant startedAt,
         Instant completedAt,
+        RepairOutcome outcome,
+        String outcomeReason,
         EvidenceBundle evidenceBundle,
         String tracebackSummary,
         RepairPlan plan,

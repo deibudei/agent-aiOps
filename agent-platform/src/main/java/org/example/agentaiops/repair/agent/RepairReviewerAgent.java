@@ -50,6 +50,14 @@ public class RepairReviewerAgent {
                     changedFiles);
         }
 
+        if (executionResult.testResult() == null) {
+            return new ReviewDecision(
+                    ReviewStatus.REJECT,
+                    "Target-service tests did not run.",
+                    "Do not commit a patch without an explicit test result.",
+                    changedFiles);
+        }
+
         if (!executionResult.testResult().success()) {
             return new ReviewDecision(
                     ReviewStatus.REVISE,
@@ -92,7 +100,7 @@ public class RepairReviewerAgent {
         return new ReviewDecision(
                 ReviewStatus.PASS,
                 "Patch is limited to target-service and tests pass.",
-                "Low risk: a defensive parameter validation was added before division.",
+                "Low risk: the diff stays inside the allowed target-service repair surface and the regression suite passed.",
                 changedFiles);
     }
 
