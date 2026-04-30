@@ -33,9 +33,16 @@ Required demo loop:
 - Frontend is intentionally deferred until backend flow is stable.
 - LLM repair, GitHub PR, and Feishu are implemented but disabled by default in upload-safe config.
 - Demo fault injection is available under `POST /api/demo/faults/{faultType}/inject`; it writes only fixed demo files under `target-service/src/main`.
+- One-click demo scenario orchestration is available under `POST /api/demo/scenarios/start` and `POST /api/demo/scenarios/{sessionId}/confirm-target-restarted`; it injects a fault, waits for manual `target-service` restart, prepares fresh traceback/test evidence, and starts the repair workflow.
+- Source-injection demo scenarios require `REPAIR_GIT_ENABLED=false`; they intentionally dirty the working tree. For real GitHub PR demos, use the committed `demo/fault/...` base branch and call `POST /api/repair/run` directly.
+- PR-safe one-click demo scenarios are available under `POST /api/demo/pr-scenarios/start` and `POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted`; they require a clean working tree, `REPAIR_GIT_ENABLED=true`, `REPAIR_GITHUB_ENABLED=true`, and `REPAIR_BASE_BRANCH=demo/fault/{faultType}`. They prepare `repair/{sessionId}` before Agent patching, avoiding dirty checkout failures.
+- PR-safe demo fault branch mapping: `quantity-division-by-zero -> demo/fault/quantity-division-by-zero`, `wrong-quote-route -> demo/fault/wrong-quote-route`, `wrong-error-status -> demo/fault/wrong-error-status`.
+- `TARGET_SERVICE_BASE_URL` configures the running target-service URL used by scenario orchestration; default is `http://localhost:9910`.
 - Runtime 500 traceback logs are written as separate files under `target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log`, with traceback filenames and file `timestamp=` values formatted in Asia/Shanghai time.
 - `agent-platform` should read traceback evidence from the `target-service/logs` directory, not only from one monolithic log file.
+- For `wrong-quote-route` and `wrong-error-status` scenarios, `agent-platform` runs target-service tests once and writes a latest test-failure evidence log under `target-service/logs/tracebacks/` to avoid stale runtime tracebacks misleading diagnosis.
 - Repair records should be written under repo-root `repair-records/`.
+- Repair record summaries are exposed through `GET /api/repair/records`, which aggregates `repair-records/*.json` into outcome/timing/token/test/PR/notification summaries for later frontend and experiment views.
 - If records appear under `agent-platform/repair-records/`, the running backend is stale or the workspace root was misdetected; restart `agent-platform` from repo root.
 - Keep `README.zh-CN.md`, `README.md`, and this `AGENTS.md` updated whenever project architecture, commands, environment variables, demo flow, or Agent capability status changes.
 - User preference: whenever answering about plans, planning, or roadmap decisions, search the web first and ground the answer in current sources when practical.
@@ -82,8 +89,9 @@ Current implementation status:
 3. Deterministic Java DAG implementation lives in `repair/agentic` with AI sub-agents under `repair/agentic/agents` and non-AI operators under `repair/agentic/operators`.
 4. Reflexion (apply -> test -> rollback -> regenerate) bounded by `repair.workflow.max-patch-attempts`.
 5. Real GitHub PR via REST API and real Feishu v2 card with timing/token block are implemented, gated by enable flags, and validated in `e2e-token-2`.
-6. Demo fault injection is available for local replay.
-7. Next work: validate more fault types end to end, add more orchestration-level tests, and improve repair record retrieval/knowledge reuse.
+6. Demo fault injection and one-click demo scenario orchestration are available for local replay.
+7. Repair record indexing is available through `GET /api/repair/records`.
+8. Next work: validate each supported fault type once through the scenario API, keep one real PR + Feishu golden path, then build the frontend workbench after backend events and record summaries stabilize.
 
 ## LangChain4j Integration Notes
 
@@ -152,6 +160,30 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset
 
 After injecting or resetting a demo fault, restart `target-service` before triggering HTTP behavior. The injection API edits source files only and does not hot reload the running Spring Boot process.
 
+One-click demo scenario:
+
+```powershell
+$body = @{ sessionId = "scenario-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/start" -ContentType "application/json" -Body $body
+# Restart target-service after WAITING_FOR_TARGET_RESTART.
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001/confirm-target-restarted"
+Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records"
+```
+
+One-click demo + PR scenario:
+
+```powershell
+$env:REPAIR_GIT_ENABLED="true"
+$env:REPAIR_GITHUB_ENABLED="true"
+$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
+$body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+# Restart target-service after WAITING_FOR_TARGET_RESTART.
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+```
+
+For `wrong-quote-route` and `wrong-error-status`, create committed base branches `demo/fault/wrong-quote-route` and `demo/fault/wrong-error-status` first, then restart `agent-platform` with the matching `REPAIR_BASE_BRANCH`.
+
 Enable repair locally:
 
 ```powershell
@@ -161,6 +193,7 @@ $env:OPENAI_API_KEY="your OpenAI API key"
 $env:REPAIR_LLM_MAX_TOKENS="4096"
 $env:REPAIR_LLM_REFLECTION_MODEL=""
 $env:REPAIR_MAX_PATCH_ATTEMPTS="2"
+$env:TARGET_SERVICE_BASE_URL="http://localhost:9910"
 ```
 
 Enable real PR + Feishu locally:

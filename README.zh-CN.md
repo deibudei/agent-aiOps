@@ -45,7 +45,7 @@
 
 ## 当前实现状态与下一步
 
-当前纵向 MVP 和真实 PR + 飞书主链路已经跑通，重点不再是“是否能调用模型”，而是继续扩大故障类型、补齐编排测试和沉淀修复记录。
+当前纵向 MVP 和真实 PR + 飞书主链路已经跑通，重点不再是“是否能调用模型”，而是把比赛演示流程沉淀为可复用的一键 Demo 编排、单次故障验收和修复记录索引。
 
 已完成：
 
@@ -58,6 +58,8 @@
 - Agentic 编排：`AgenticRepairRunner` 负责装配并顺序调用 Java DAG，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
 - 修复耗时与 token 观测：`RepairTiming` 记录总耗时、每个 Java DAG 节点耗时、模型名称和 token 消耗；`ObservedChatModel` 在模型边界直接采集 `ChatResponse.tokenUsage()`，并写入 SSE、JSON 记录、Markdown 记录和飞书卡片。部分 OpenAI-compatible provider 不返回 token usage 时，记录中的 token 字段保持为空，飞书卡片明确显示 provider 未返回 token usage。
 - 演示故障：已提供 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 三类故障注入 API。
+- 一键 Demo 编排：`POST /api/demo/scenarios/start` 注入源码级故障并进入 `WAITING_FOR_TARGET_RESTART`；重启 `target-service` 后调用 `POST /api/demo/scenarios/{sessionId}/confirm-target-restarted`，平台会准备最新 traceback/测试失败证据并启动修复。
+- 修复记录索引：`GET /api/repair/records` 会聚合 `repair-records/*.json`，返回 outcome、耗时、token、patch attempt、测试结果、PR 和飞书状态，方便后续前端或实验报告消费。
 - 修复结果：SSE completed 事件和修复记录写入 `outcome=FIXED|FAILED|ERROR` 与 `outcomeReason`。patch/test/review/PR 的受控失败是 `COMPLETED + FAILED`；系统异常是 `ERROR`，并写入最小错误记录。
 
 ### 真实 PR 演示分支模型
@@ -92,10 +94,10 @@ git push --force-with-lease origin demo/fault/quantity-division-by-zero
 
 下一步：
 
-1. 给 `wrong-quote-route` 和 `wrong-error-status` 跑完整 Agentic 修复验证。
-2. 增加 Agentic 编排层面的测试，覆盖 JSON 解析失败、空补丁、测试失败、路径越界等场景。
-3. 优化修复记录检索和经验沉淀，后续再决定是否接入向量数据库/RAG。
-4. 比赛主链路录制稳定后，再做前端工作台和更复杂触发源。
+1. 用一键 Demo 编排对 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 各跑 1 次验收，避免重复消耗 token。
+2. 保留 1 条真实 PR + 飞书黄金链路，其它故障可先本地记录 outcome、耗时、token 和测试结果。
+3. 前端暂缓；等 scenario API、SSE payload、`GET /api/repair/records` 稳定后，再做实时工作台。
+4. 后续再扩展生产触发源（日志轮询、Sentry、OpenTelemetry、CI 失败）和 RAG/知识库。
 
 ### 修复耗时与 token 观测
 
@@ -324,6 +326,94 @@ Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantit
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
 ```
 
+## 一键 Demo 编排
+
+`agent-platform` 还提供一组 scenario API，用于把“选择故障 -> 注入源码 -> 人工重启确认 -> 准备证据 -> 启动 Agent 修复 -> SSE 追踪 -> 修复记录索引”串成比赛演示流程。第一版仍保留源码级故障注入，所以注入后需要人工重启 `target-service`。
+
+注意：源码注入型 scenario 会制造本地 dirty working tree，因此要求 `REPAIR_GIT_ENABLED=false`。它适合验证 Agent 修复、测试、记录和飞书本地演示；真实 GitHub PR 演示应使用已提交的 `demo/fault/...` base 分支，然后直接调用 `POST /api/repair/run`。
+
+启动一个场景：
+
+```powershell
+$body = @{ sessionId = "scenario-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/start" -ContentType "application/json" -Body $body
+```
+
+返回 `stage=WAITING_FOR_TARGET_RESTART` 后，重启终端 1 里的 `target-service`，然后确认继续：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001/confirm-target-restarted"
+```
+
+确认后，scenario API 会：
+
+- `quantity-division-by-zero`：调用 `TARGET_SERVICE_BASE_URL/api/orders/quote?totalCents=100&quantity=0`，期望产生 HTTP 500 和独立 traceback 文件。
+- `wrong-quote-route` / `wrong-error-status`：运行一次 `target-service` 测试，并把失败输出写成最新证据日志，避免旧 traceback 干扰 Agent 诊断。
+- 调用 `POST /api/repair/run` 启动修复，并返回 `repairStreamUrl`。
+
+查看场景状态：
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001"
+```
+
+查看 SSE：
+
+```text
+GET http://localhost:9901/api/repair/stream/scenario-quantity-001
+```
+
+### 一键 Demo + PR
+
+如果要“一键 Demo + 创建 GitHub PR”，使用 PR-safe scenario API。它不会临时注入当前工作区源码，而是要求故障已经提交在对应 base 分支上：
+
+```text
+quantity-division-by-zero -> demo/fault/quantity-division-by-zero
+wrong-quote-route         -> demo/fault/wrong-quote-route
+wrong-error-status        -> demo/fault/wrong-error-status
+```
+
+运行前要求：
+
+- 工作区必须 clean；未提交的文档、平台代码或 target-service 改动都会阻止切分支。
+- `REPAIR_GIT_ENABLED=true`
+- `REPAIR_GITHUB_ENABLED=true`
+- `REPAIR_BASE_BRANCH` 必须等于当前故障类型对应的 `demo/fault/{faultType}`。
+- 对应的 `demo/fault/{faultType}` 分支必须已经存在于本地或远端，并且只包含这一个故障。
+
+以除零故障为例：
+
+```powershell
+$env:REPAIR_GIT_ENABLED="true"
+$env:REPAIR_GITHUB_ENABLED="true"
+$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
+
+$body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+```
+
+返回 `WAITING_FOR_TARGET_RESTART` 后，重启 `target-service`，然后：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+```
+
+另外两个故障不要用同一个 base 分支混跑。先准备对应故障分支，再改 `REPAIR_BASE_BRANCH` 并重启 `agent-platform`：
+
+```powershell
+# 路由故障
+$env:REPAIR_BASE_BRANCH="demo/fault/wrong-quote-route"
+$body = @{ sessionId = "pr-route-001"; faultType = "wrong-quote-route" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+
+# 状态码故障
+$env:REPAIR_BASE_BRANCH="demo/fault/wrong-error-status"
+$body = @{ sessionId = "pr-status-001"; faultType = "wrong-error-status" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+```
+
+如果 `demo/fault/wrong-quote-route` 或 `demo/fault/wrong-error-status` 还不存在，需要先从当前 `main` 创建并提交对应单一故障；否则 PR-safe scenario 会拒绝启动或 fetch/checkout 失败。
+
 ## 环境变量
 
 ```text
@@ -335,6 +425,7 @@ REPAIR_LLM_REFLECTION_MODEL=
 REPAIR_MAX_PATCH_ATTEMPTS=2
 
 REPAIR_TARGET_LOG=target-service/logs
+TARGET_SERVICE_BASE_URL=http://localhost:9910
 TARGET_SERVICE_LOG_FILE=logs/target-service.log
 TARGET_SERVICE_TRACEBACK_LOG_DIR=logs/tracebacks
 
@@ -472,6 +563,14 @@ mvn -pl agent-platform spring-boot:run
 - PR 结果
 - 飞书通知结果
 - Agent 反思沉淀
+
+修复记录索引 API：
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records"
+```
+
+索引会读取 repo-root `repair-records/*.json`，返回 `sessionId`、`outcome`、`durationMillis`、`patchAttempts`、`totalTokens`、`testSuccess`、`prUrl` 和 `notificationSuccess` 等摘要字段。这个 API 是后续前端工作台和单次故障验收报告的读取入口。
 
 ## 新终端快速恢复上下文
 

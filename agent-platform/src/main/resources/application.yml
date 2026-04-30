@@ -26,6 +26,7 @@ repair:
     name: target-service
     root-path: ${REPAIR_TARGET_ROOT:target-service}
     log-path: ${REPAIR_TARGET_LOG:target-service/logs}
+    base-url: ${TARGET_SERVICE_BASE_URL:http://localhost:9910}
     test-command: ${REPAIR_TEST_COMMAND:mvn -pl target-service test}
   workflow:
     max-repair-attempts: ${REPAIR_MAX_ATTEMPTS:3}

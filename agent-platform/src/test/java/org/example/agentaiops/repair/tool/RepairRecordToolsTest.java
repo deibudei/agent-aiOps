@@ -15,7 +15,9 @@ import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairPlan;
 import org.example.agentaiops.repair.model.RepairRecord;
+import org.example.agentaiops.repair.model.RepairRecordIndex;
 import org.example.agentaiops.repair.model.RepairReflection;
+import org.example.agentaiops.repair.model.RepairStepResult;
 import org.example.agentaiops.repair.model.RepairStepTiming;
 import org.example.agentaiops.repair.model.RepairTiming;
 import org.example.agentaiops.repair.model.ReviewDecision;
@@ -65,12 +67,33 @@ class RepairRecordToolsTest {
         assertThat(result.error()).contains("Invalid sessionId");
     }
 
+    @Test
+    void listsRecordSummariesSortedByCompletionTime() {
+        RepairProperties properties = new RepairProperties();
+        properties.setWorkspaceRoot(tempDir.toString());
+        RepairRecordTools tools = new RepairRecordTools(new ToolPolicy(properties), new ObjectMapper());
+        tools.writeRecord(recordWithTiming("old-session", Instant.parse("2026-04-27T09:00:00Z")));
+        tools.writeRecord(recordWithTiming("new-session", Instant.parse("2026-04-27T10:00:00Z")));
+
+        RepairRecordIndex index = tools.listRecordSummaries();
+
+        assertThat(index.count()).isEqualTo(2);
+        assertThat(index.records().get(0).sessionId()).isEqualTo("new-session");
+        assertThat(index.records().get(0).totalTokens()).isEqualTo(120);
+        assertThat(index.records().get(0).patchAttempts()).isEqualTo(1);
+        assertThat(index.records().get(0).testSuccess()).isTrue();
+        assertThat(index.records().get(0).recordPath()).isEqualTo("repair-records/new-session.json");
+    }
+
     private RepairRecord recordWithTiming() {
         return recordWithTiming("timing-session");
     }
 
     private RepairRecord recordWithTiming(String sessionId) {
-        Instant started = Instant.parse("2026-04-27T09:00:00Z");
+        return recordWithTiming(sessionId, Instant.parse("2026-04-27T09:00:00Z"));
+    }
+
+    private RepairRecord recordWithTiming(String sessionId, Instant started) {
         RepairTiming timing = new RepairTiming(
                 started,
                 started.plusMillis(1234),
@@ -106,7 +129,7 @@ class RepairRecordToolsTest {
                         List.of("target-service/src/main/java/App.java"),
                         List.of("patch"),
                         "mvn -pl target-service test"),
-                List.of(),
+                List.of(new RepairStepResult("PatchParser", "patch", "ok", true)),
                 null,
                 null,
                 "diff",

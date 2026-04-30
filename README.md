@@ -47,13 +47,13 @@ The full competition loop has been verified end to end on the committed `demo/fa
 
 ## Current Implementation Status
 
-- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, typed `RepairReflection`, LangChain4j `@Description` field hints, controlled atomic patch application, tests, review gates, repair records, repair timing and token observability, demo fault injection, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration.
+- Done: structured evidence, typed `DiagnosisResult`, typed `RepairPlan`, typed `PatchProposal`, typed `RepairReflection`, LangChain4j `@Description` field hints, controlled atomic patch application, tests, review gates, repair records, repair timing and token observability, demo fault injection, one-click demo scenario orchestration, repair record indexing, role-specific model routing, OpenAI-compatible model configuration, DashScope configuration.
 - Done: deterministic Java DAG implementation under `repair/agentic` with AI sub-agents in `repair/agentic/agents` and non-AI operators in `repair/agentic/operators`.
 - Done: reflexion loop on test failure (rollback + regeneratePatchFromTestFailure with bounded attempts).
 - Done: real GitHub PR creation through REST API (`GitHubRestPullRequestProvider`), with auto-detected owner/repo from the git origin remote.
 - Done: Feishu v2 interactive card with title/summary/timing/token block, "View PR" button, and optional signing-secret support. Unknown token usage is shown as unknown instead of zero.
 - Disabled by default: LLM repair, Git commit/push, GitHub PR creation, and Feishu notification (toggle with `REPAIR_LLM_ENABLED`, `REPAIR_GIT_ENABLED`, `REPAIR_GITHUB_ENABLED`, `FEISHU_ENABLED`).
-- Next: broaden real E2E validation to `wrong-quote-route` and `wrong-error-status`, add more orchestration-level tests, improve repair record retrieval/knowledge reuse, and add a frontend workbench after the competition demo remains repeatable.
+- Next: run one validation per fault type through the scenario API, keep one real PR + Feishu golden path, and defer the frontend until the scenario API, SSE payloads, and repair-record index are stable.
 
 The current mainline target service is repaired. Use the demo fault injection endpoints for local replay, or use the committed demo base branch described below for real PR demos.
 
@@ -159,6 +159,7 @@ REPAIR_LLM_TIMEOUT_SECONDS=90
 REPAIR_LLM_MAX_RETRIES=1
 REPAIR_LLM_REFLECTION_MODEL=
 REPAIR_MAX_PATCH_ATTEMPTS=2
+TARGET_SERVICE_BASE_URL=http://localhost:9910
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 REPAIR_GIT_ENABLED=false
@@ -245,5 +246,63 @@ Supported fault types:
 - `quantity-division-by-zero`
 - `wrong-quote-route`
 - `wrong-error-status`
+
+## One-Click Demo Scenario API
+
+The scenario API turns the manual competition flow into a backend state machine while keeping source-level fault injection. It still pauses for an operator restart because injected Java source is not hot-reloaded by the running `target-service` process.
+
+Source-injection scenarios intentionally dirty the local working tree, so they require `REPAIR_GIT_ENABLED=false`. Use them for local repair/test/record/Feishu validation. For a real GitHub PR demo, use the committed `demo/fault/...` base branch and call `POST /api/repair/run` directly.
+
+```powershell
+$body = @{ sessionId = "scenario-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/start" -ContentType "application/json" -Body $body
+
+# Restart target-service after the response says WAITING_FOR_TARGET_RESTART.
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001/confirm-target-restarted"
+
+Invoke-RestMethod -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001"
+```
+
+`quantity-division-by-zero` triggers the running target service through `TARGET_SERVICE_BASE_URL` and expects a fresh HTTP 500 traceback. `wrong-quote-route` and `wrong-error-status` run one target-service test pass and write the failing output as the latest evidence log so stale traceback files do not mislead diagnosis. The confirm call starts the repair workflow and returns the SSE URL.
+
+### One-Click Demo + PR
+
+Use the PR-safe scenario API when the demo must also create a GitHub PR. This path does not inject source into the current working tree. It prepares `repair/{sessionId}` from the configured committed fault base branch, waits for a manual target-service restart, then starts the normal repair workflow.
+
+Requirements:
+
+- Clean working tree.
+- `REPAIR_GIT_ENABLED=true`
+- `REPAIR_GITHUB_ENABLED=true`
+- `REPAIR_BASE_BRANCH=demo/fault/{faultType}`
+- A committed fault base branch exists locally or on the configured remote.
+
+Fault-to-branch mapping:
+
+```text
+quantity-division-by-zero -> demo/fault/quantity-division-by-zero
+wrong-quote-route         -> demo/fault/wrong-quote-route
+wrong-error-status        -> demo/fault/wrong-error-status
+```
+
+```powershell
+$env:REPAIR_GIT_ENABLED="true"
+$env:REPAIR_GITHUB_ENABLED="true"
+$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
+
+$body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+
+# Restart target-service after WAITING_FOR_TARGET_RESTART.
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+```
+
+For the other two faults, first create and push `demo/fault/wrong-quote-route` and `demo/fault/wrong-error-status` with only that fault committed. Then restart `agent-platform` with the matching `REPAIR_BASE_BRANCH` before calling `/api/demo/pr-scenarios/start`.
+
+Repair record summaries are exposed for future frontend and experiment views:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records"
+```
 
 Keep real API keys in environment variables only. `.env`, `.env.*`, `*.secret`, `local-secrets/`, and `local-reports/` are ignored.

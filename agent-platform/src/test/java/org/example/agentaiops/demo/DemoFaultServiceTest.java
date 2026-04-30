@@ -42,7 +42,7 @@ class DemoFaultServiceTest {
                 "target-service/src/main/java/com/example/targetservice/service/OrderService.java"));
         assertThat(result.success()).isTrue();
         assertThat(content).contains("return totalCents / quantity;");
-        assertThat(content).doesNotContain("quantity must be greater than 0");
+        assertThat(content).doesNotContain("quantity must be positive");
     }
 
     @Test

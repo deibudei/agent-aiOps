@@ -98,6 +98,7 @@ public class RepairProperties {
         private String name = "target-service";
         private String rootPath = "target-service";
         private String logPath = "target-service/logs";
+        private String baseUrl = "http://localhost:9910";
         private String testCommand = "mvn -pl target-service test";
 
         /** Returns the logical target project name. */
@@ -128,6 +129,16 @@ public class RepairProperties {
         /** Updates the target-service log path. */
         public void setLogPath(String logPath) {
             this.logPath = logPath;
+        }
+
+        /** Returns the running target-service base URL used by demo scenarios. */
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        /** Updates the running target-service base URL used by demo scenarios. */
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
         }
 
         /** Returns the Maven command used for validation. */

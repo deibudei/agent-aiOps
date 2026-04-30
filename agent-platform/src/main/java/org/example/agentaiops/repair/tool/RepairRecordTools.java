@@ -5,9 +5,13 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
 import java.util.regex.Pattern;
 import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairRecord;
+import org.example.agentaiops.repair.model.RepairRecordIndex;
+import org.example.agentaiops.repair.model.RepairRecordSummary;
 import org.example.agentaiops.repair.model.RepairStepTiming;
 import org.example.agentaiops.repair.model.ToolExecutionResult;
 import org.springframework.stereotype.Component;
@@ -41,6 +45,56 @@ public class RepairRecordTools {
         } catch (IOException | IllegalArgumentException e) {
             return ToolExecutionResult.failure(e.getMessage());
         }
+    }
+
+    /** Lists compact repair record summaries sorted by newest completion time. */
+    public RepairRecordIndex listRecordSummaries() {
+        Path recordsDir = toolPolicy.workspaceRoot().resolve("repair-records").normalize();
+        if (!Files.isDirectory(recordsDir)) {
+            return new RepairRecordIndex(0, List.of());
+        }
+        try (var stream = Files.list(recordsDir)) {
+            List<RepairRecordSummary> summaries = stream
+                    .filter(path -> Files.isRegularFile(path) && path.getFileName().toString().endsWith(".json"))
+                    .map(this::readSummary)
+                    .filter(summary -> summary != null)
+                    .sorted(Comparator
+                            .comparing(
+                                    RepairRecordSummary::completedAt,
+                                    Comparator.nullsLast(Comparator.reverseOrder()))
+                            .thenComparing(RepairRecordSummary::sessionId))
+                    .toList();
+            return new RepairRecordIndex(summaries.size(), summaries);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to list repair records: " + e.getMessage(), e);
+        }
+    }
+
+    private RepairRecordSummary readSummary(Path path) {
+        try {
+            RepairRecord record = objectMapper.readValue(path.toFile(), RepairRecord.class);
+            return toSummary(record, toolPolicy.display(path));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private RepairRecordSummary toSummary(RepairRecord record, String recordPath) {
+        Long durationMillis = record.timing() == null ? null : record.timing().durationMillis();
+        return new RepairRecordSummary(
+                record.sessionId(),
+                record.outcome(),
+                record.outcomeReason(),
+                record.startedAt(),
+                record.completedAt(),
+                durationMillis,
+                patchAttempts(record),
+                totalTokens(record),
+                record.testResult() == null ? null : record.testResult().success(),
+                record.testResult() == null ? null : record.testResult().exitCode(),
+                record.pullRequestResult() == null ? "" : record.pullRequestResult().url(),
+                record.notificationResult() == null ? null : record.notificationResult().success(),
+                recordPath);
     }
 
     /** Converts the main repair facts into a readable Markdown report. */
@@ -123,6 +177,42 @@ public class RepairRecordTools {
             return value == null ? "" : value;
         }
         return value.substring(0, maxLength) + "\n... trimmed ...";
+    }
+
+    private int patchAttempts(RepairRecord record) {
+        if (record.stepResults() == null || record.stepResults().isEmpty()) {
+            return record.patchProposal() == null ? 0 : 1;
+        }
+        long parserAttempts = record.stepResults().stream()
+                .filter(step -> "PatchParser".equals(step.toolName()))
+                .count();
+        if (parserAttempts > 0) {
+            return Math.toIntExact(parserAttempts);
+        }
+        long applyAttempts = record.stepResults().stream()
+                .filter(step -> "PatchTools".equals(step.toolName()))
+                .count();
+        if (applyAttempts > 0) {
+            return Math.toIntExact(applyAttempts);
+        }
+        return record.patchProposal() == null ? 0 : 1;
+    }
+
+    private Long totalTokens(RepairRecord record) {
+        if (record.timing() == null || record.timing().modelUsage() == null
+                || record.timing().modelUsage().isEmpty()) {
+            return null;
+        }
+        boolean hasAnyToken = false;
+        long total = 0L;
+        for (RepairModelUsage usage : record.timing().modelUsage()) {
+            Integer value = usage.totalTokenCount();
+            if (value != null) {
+                hasAnyToken = true;
+                total += value;
+            }
+        }
+        return hasAnyToken ? total : null;
     }
 
     private String timingTable(RepairRecord record) {

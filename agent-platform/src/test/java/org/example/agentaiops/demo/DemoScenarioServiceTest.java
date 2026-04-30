@@ -1,0 +1,261 @@
+package org.example.agentaiops.demo;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.example.agentaiops.config.RepairProperties;
+import org.example.agentaiops.repair.model.GitCommitResult;
+import org.example.agentaiops.repair.model.RepairRunResponse;
+import org.example.agentaiops.repair.model.TestExecutionResult;
+import org.example.agentaiops.repair.service.RepairWorkflowService;
+import org.example.agentaiops.repair.tool.GitTools;
+import org.example.agentaiops.repair.tool.RunTestTools;
+import org.example.agentaiops.repair.tool.ToolPolicy;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.web.server.ResponseStatusException;
+
+class DemoScenarioServiceTest {
+
+    @TempDir
+    Path tempDir;
+
+    private DemoScenarioService service;
+    private RepairWorkflowService repairWorkflowService;
+    private RunTestTools runTestTools;
+    private HttpClient httpClient;
+    private GitTools gitTools;
+    private RepairProperties properties;
+    private DemoFaultService demoFaultService;
+    private ToolPolicy toolPolicy;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        Files.createFile(tempDir.resolve("pom.xml"));
+        Files.createDirectories(tempDir.resolve("agent-platform"));
+        Files.createFile(tempDir.resolve("agent-platform/pom.xml"));
+        Files.createDirectories(tempDir.resolve("target-service/src/main/java/com/example/targetservice/service"));
+        Files.createDirectories(tempDir.resolve("target-service/src/main/java/com/example/targetservice/controller"));
+        Files.createDirectories(tempDir.resolve("target-service/src/main/java/com/example/targetservice/web"));
+        Files.createFile(tempDir.resolve("target-service/pom.xml"));
+
+        properties = new RepairProperties();
+        properties.setWorkspaceRoot(tempDir.toString());
+        properties.getTargetProject().setBaseUrl("http://localhost:9910");
+        toolPolicy = new ToolPolicy(properties);
+        demoFaultService = new DemoFaultService(toolPolicy);
+        demoFaultService.reset();
+
+        repairWorkflowService = mock(RepairWorkflowService.class);
+        runTestTools = mock(RunTestTools.class);
+        httpClient = mock(HttpClient.class);
+        gitTools = mock(GitTools.class);
+        service = new DemoScenarioService(
+                demoFaultService,
+                repairWorkflowService,
+                runTestTools,
+                toolPolicy,
+                gitTools,
+                properties,
+                httpClient);
+    }
+
+    @Test
+    void startInjectsFaultAndWaitsForManualRestart() {
+        DemoScenarioResult result = service.start(request("scenario-001", "quantity-division-by-zero"));
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.WAITING_FOR_TARGET_RESTART);
+        assertThat(result.success()).isTrue();
+        assertThat(result.changedFiles())
+                .contains("target-service/src/main/java/com/example/targetservice/service/OrderService.java");
+        assertThat(result.nextSteps()).anySatisfy(step -> assertThat(step).contains("confirm-target-restarted"));
+        verify(repairWorkflowService, never()).startAsync(any());
+    }
+
+    @Test
+    void rejectsDuplicateSessionId() {
+        service.start(request("scenario-duplicate", "quantity-division-by-zero"));
+
+        assertThatThrownBy(() -> service.start(request("scenario-duplicate", "wrong-quote-route")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("already exists");
+    }
+
+    @Test
+    void rejectsUnsupportedFaultType() {
+        assertThatThrownBy(() -> service.start(request("scenario-bad", "missing-fault")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Unsupported demo fault type");
+    }
+
+    @Test
+    void rejectsSourceInjectionScenarioWhenGitAutomationIsEnabled() {
+        properties.getGit().setEnabled(true);
+        service = new DemoScenarioService(
+                demoFaultService,
+                repairWorkflowService,
+                runTestTools,
+                toolPolicy,
+                gitTools,
+                properties,
+                httpClient);
+
+        assertThatThrownBy(() -> service.start(request("scenario-git", "quantity-division-by-zero")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("REPAIR_GIT_ENABLED=false");
+    }
+
+    @Test
+    void startsPullRequestScenarioFromConfiguredFaultBaseBranch() {
+        properties.getGit().setEnabled(true);
+        properties.getGithub().setEnabled(true);
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+        when(gitTools.prepareRepairBranchFromBase("scenario-pr"))
+                .thenReturn(new GitCommitResult(
+                        true,
+                        "repair/scenario-pr",
+                        "fix(repair): PR demo scenario",
+                        "prepared"));
+
+        DemoScenarioResult result = service.startPullRequestScenario(
+                request("scenario-pr", "quantity-division-by-zero"));
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.WAITING_FOR_TARGET_RESTART);
+        assertThat(result.message()).contains("repair/scenario-pr");
+        assertThat(result.evidenceSummary()).contains("demo/fault/quantity-division-by-zero");
+    }
+
+    @Test
+    void rejectsPullRequestScenarioWhenBaseBranchDoesNotMatchFaultType() {
+        properties.getGit().setEnabled(true);
+        properties.getGithub().setEnabled(true);
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+
+        assertThatThrownBy(() -> service.startPullRequestScenario(request("scenario-route-pr", "wrong-quote-route")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("REPAIR_BASE_BRANCH=demo/fault/wrong-quote-route");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void confirmPullRequestScenarioStartsRepairAfterEvidence() throws Exception {
+        properties.getGit().setEnabled(true);
+        properties.getGithub().setEnabled(true);
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+        when(gitTools.prepareRepairBranchFromBase("scenario-pr-confirm"))
+                .thenReturn(new GitCommitResult(
+                        true,
+                        "repair/scenario-pr-confirm",
+                        "fix(repair): PR demo scenario",
+                        "prepared"));
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(500);
+        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(response);
+        when(repairWorkflowService.startAsync("scenario-pr-confirm"))
+                .thenReturn(new RepairRunResponse(
+                        "scenario-pr-confirm", "started", "/api/repair/stream/scenario-pr-confirm"));
+        service.startPullRequestScenario(request("scenario-pr-confirm", "quantity-division-by-zero"));
+
+        DemoScenarioResult result = service.confirmPullRequestTargetRestarted("scenario-pr-confirm");
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.REPAIR_STARTED);
+        assertThat(result.repairStreamUrl()).isEqualTo("/api/repair/stream/scenario-pr-confirm");
+        verify(repairWorkflowService).startAsync("scenario-pr-confirm");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void confirmTargetRestartedTriggersRuntimeFailureAndStartsRepair() throws Exception {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(500);
+        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(response);
+        when(repairWorkflowService.startAsync("scenario-runtime"))
+                .thenReturn(new RepairRunResponse(
+                        "scenario-runtime", "started", "/api/repair/stream/scenario-runtime"));
+        service.start(request("scenario-runtime", "quantity-division-by-zero"));
+
+        DemoScenarioResult result = service.confirmTargetRestarted("scenario-runtime");
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.REPAIR_STARTED);
+        assertThat(result.repairStreamUrl()).isEqualTo("/api/repair/stream/scenario-runtime");
+        assertThat(result.evidenceSummary()).contains("HTTP 500");
+        verify(repairWorkflowService).startAsync("scenario-runtime");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void keepsWaitingWhenRuntimeFaultWasNotLoadedByRestart() throws Exception {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(400);
+        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(response);
+        service.start(request("scenario-no-restart", "quantity-division-by-zero"));
+
+        DemoScenarioResult result = service.confirmTargetRestarted("scenario-no-restart");
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.WAITING_FOR_TARGET_RESTART);
+        assertThat(result.success()).isFalse();
+        assertThat(result.message()).contains("may still be running fixed code");
+        verify(repairWorkflowService, never()).startAsync(any());
+    }
+
+    @Test
+    void writesTestFailureEvidenceForNonRuntimeFaults() throws Exception {
+        when(runTestTools.runTargetServiceTests()).thenReturn(new TestExecutionResult(
+                1,
+                "OrderControllerTest expected status 200 but was 404",
+                "",
+                1234,
+                false));
+        when(repairWorkflowService.startAsync("scenario-route"))
+                .thenReturn(new RepairRunResponse(
+                        "scenario-route", "started", "/api/repair/stream/scenario-route"));
+        service.start(request("scenario-route", "wrong-quote-route"));
+
+        DemoScenarioResult result = service.confirmTargetRestarted("scenario-route");
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.REPAIR_STARTED);
+        assertThat(result.evidenceSummary()).contains("test-failure evidence");
+        Path tracebacks = tempDir.resolve("target-service/logs/tracebacks");
+        try (var stream = Files.list(tracebacks)) {
+            Path evidence = stream.findFirst().orElseThrow();
+            String content = Files.readString(evidence);
+            assertThat(content).contains("faultType=wrong-quote-route");
+            assertThat(content).contains("OrderControllerTest expected status 200 but was 404");
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectsConfirmAfterRepairHasStarted() throws Exception {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(500);
+        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(response);
+        when(repairWorkflowService.startAsync("scenario-started"))
+                .thenReturn(new RepairRunResponse(
+                        "scenario-started", "started", "/api/repair/stream/scenario-started"));
+        service.start(request("scenario-started", "quantity-division-by-zero"));
+        service.confirmTargetRestarted("scenario-started");
+
+        assertThatThrownBy(() -> service.confirmTargetRestarted("scenario-started"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("not waiting");
+    }
+
+    private DemoScenarioStartRequest request(String sessionId, String faultType) {
+        DemoScenarioStartRequest request = new DemoScenarioStartRequest();
+        request.setSessionId(sessionId);
+        request.setFaultType(faultType);
+        return request;
+    }
+}

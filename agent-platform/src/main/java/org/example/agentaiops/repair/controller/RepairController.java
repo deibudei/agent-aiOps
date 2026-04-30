@@ -2,8 +2,10 @@ package org.example.agentaiops.repair.controller;
 
 import org.example.agentaiops.repair.model.RepairRunRequest;
 import org.example.agentaiops.repair.model.RepairRunResponse;
+import org.example.agentaiops.repair.model.RepairRecordIndex;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.service.RepairWorkflowService;
+import org.example.agentaiops.repair.tool.RepairRecordTools;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,11 +21,16 @@ public class RepairController {
 
     private final RepairWorkflowService repairWorkflowService;
     private final RepairEventHub repairEventHub;
+    private final RepairRecordTools repairRecordTools;
 
     /** Wires the repair workflow API and event stream API. */
-    public RepairController(RepairWorkflowService repairWorkflowService, RepairEventHub repairEventHub) {
+    public RepairController(
+            RepairWorkflowService repairWorkflowService,
+            RepairEventHub repairEventHub,
+            RepairRecordTools repairRecordTools) {
         this.repairWorkflowService = repairWorkflowService;
         this.repairEventHub = repairEventHub;
+        this.repairRecordTools = repairRecordTools;
     }
 
     /** Starts a repair run and returns the SSE stream URL. */
@@ -37,5 +44,11 @@ public class RepairController {
     @GetMapping(value = "/stream/{sessionId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable String sessionId) {
         return repairEventHub.subscribe(sessionId);
+    }
+
+    /** Returns compact summaries of local repair records for demo and experiment views. */
+    @GetMapping("/records")
+    public RepairRecordIndex records() {
+        return repairRecordTools.listRecordSummaries();
     }
 }
