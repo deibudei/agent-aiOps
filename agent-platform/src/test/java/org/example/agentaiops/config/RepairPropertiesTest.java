@@ -14,5 +14,6 @@ class RepairPropertiesTest {
         assertThat(properties.getGithub().isEnabled()).isFalse();
         assertThat(properties.getFeishu().isEnabled()).isFalse();
         assertThat(properties.getGit().getBaseBranch()).isEqualTo("demo/fault/quantity-division-by-zero");
+        assertThat(properties.getGit().getWorktreeRoot()).isEqualTo("../agent-aiOps-worktrees");
     }
 }

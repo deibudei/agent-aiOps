@@ -48,4 +48,32 @@ class ToolPolicyTest {
         assertThat(policy.resolveForRead("target-service/src/main/java/App.java"))
                 .isEqualTo(tempDir.resolve("target-service/src/main/java/App.java").toAbsolutePath().normalize());
     }
+
+    @Test
+    void resolvesTargetPathsFromActiveRepairWorkspace() throws Exception {
+        Path worktree = tempDir.resolve("worktree");
+        Files.createFile(tempDir.resolve("pom.xml"));
+        Files.createDirectories(tempDir.resolve("agent-platform"));
+        Files.createFile(tempDir.resolve("agent-platform/pom.xml"));
+        Files.createDirectories(tempDir.resolve("target-service"));
+        Files.createFile(tempDir.resolve("target-service/pom.xml"));
+        Files.createDirectories(worktree);
+        Files.createFile(worktree.resolve("pom.xml"));
+        Files.createDirectories(worktree.resolve("agent-platform"));
+        Files.createFile(worktree.resolve("agent-platform/pom.xml"));
+        Files.createDirectories(worktree.resolve("target-service/src/main/java"));
+        Files.createFile(worktree.resolve("target-service/pom.xml"));
+
+        RepairProperties properties = new RepairProperties();
+        properties.setWorkspaceRoot(tempDir.toString());
+        RepairWorkspaceContext context = new RepairWorkspaceContext();
+        ToolPolicy policy = new ToolPolicy(properties, context);
+
+        Path resolved = context.callWithWorkspace(worktree,
+                () -> policy.resolveForWrite("target-service/src/main/java/App.java"));
+
+        assertThat(resolved).isEqualTo(
+                worktree.resolve("target-service/src/main/java/App.java").toAbsolutePath().normalize());
+        assertThat(policy.homeWorkspaceRoot()).isEqualTo(tempDir.toAbsolutePath().normalize());
+    }
 }

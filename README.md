@@ -43,7 +43,7 @@ The backend loop is now a deterministic Java DAG (`AgenticRepairRunner`) coordin
 
 If a patched run fails the target tests, `AgenticPatchAgent.regeneratePatchFromTestFailure` receives the test stderr and rewrites the patch; `PatchApplyOperator` rolls back to the pre-apply file snapshot before the new patch is applied. The number of attempts is bounded by `REPAIR_MAX_PATCH_ATTEMPTS` (default 2).
 
-The full competition loop has been verified end to end on the committed `demo/fault/quantity-division-by-zero` base branch. Latest real E2E session `e2e-token-2` read the standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, passed all 5 target-service tests, passed review, pushed `repair/e2e-token-2`, created [GitHub PR #2](https://github.com/deibudei/agent-aiOps/pull/2), sent the Feishu "fixed, please review" card, and wrote `repair-records/e2e-token-2.json` / `.md` with `outcome=FIXED`. The run took about 96.1 seconds and captured real model usage: 47,031 input tokens, 6,073 output tokens, and 53,104 total tokens. There is no non-LLM fallback; model configuration or invalid typed model output surfaces as repair `ERROR` events and writes a minimal error record.
+The full competition loop has been verified end to end on the committed `demo/fault/quantity-division-by-zero` base branch. Latest real E2E session `pr-quantity-002` used the PR-safe one-click scenario API, read the standalone traceback, diagnosed `OrderService.calculateUnitPrice`, generated and applied a patch, passed all 5 target-service tests, passed review, pushed `repair/pr-quantity-002`, created [GitHub PR #3](https://github.com/deibudei/agent-aiOps/pull/3), sent the Feishu "fixed, please review" card, and wrote `repair-records/pr-quantity-002.json` / `.md` with `outcome=FIXED`. There is no non-LLM fallback; model configuration or invalid typed model output surfaces as repair `ERROR` events and writes a minimal error record.
 
 ## Current Implementation Status
 
@@ -68,6 +68,22 @@ repair/{sessionId}                    Agent-created fix branch targeting the dem
 ```
 
 Set `REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero` when recording the PR demo. This makes the PR diff show only the Agent's repair from the faulty baseline back to the fixed code. The older `repair-demo-target` branch is no longer the primary competition-demo base because it may lag behind `main`.
+PR-safe scenarios create the repair branch in a separate git worktree under `REPAIR_WORKTREE_ROOT`, so the main checkout can stay on `main` while the repair branch is patched, tested, committed, and pushed.
+
+Runtime worktree model for PR-safe scenarios:
+
+```text
+1. Start agent-platform from main.
+2. POST /api/demo/pr-scenarios/start creates repair/{sessionId}
+   in REPAIR_WORKTREE_ROOT/{sessionId} from demo/fault/{faultType}.
+3. Restart only target-service from that worktree path so it loads the faulty code.
+4. POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted.
+5. The already-running agent-platform JVM continues using the main-compiled
+   orchestration code while repair tools read/write the isolated worktree.
+6. Tests pass -> commit -> push repair/{sessionId} -> create PR -> send Feishu.
+```
+
+Do not delete the active worktree, remove `repair/{sessionId}`, restart `agent-platform`, or edit docs/platform files while the repair workflow is running. Wait for the SSE `completed` event and the `repair-records/{sessionId}.json` / `.md` files before cleaning up disposable `repair/*` branches or worktrees.
 
 Project work continues on `main` or on normal feature branches that merge back to `main`. Do not develop documentation or platform changes on `demo/fault/...` or `repair/{sessionId}` branches. After `main` changes, refresh the demo fault branch from the latest `main` and keep only the intentional fault commit on top; repair branches are disposable outputs from demo runs.
 
@@ -100,7 +116,7 @@ Implemented behavior:
 Validation:
 
 - Run `mvn -pl agent-platform test`.
-- Latest validation: `e2e-token-2` on `demo/fault/quantity-division-by-zero` confirmed GitHub PR, Feishu card, SSE completion payload, JSON record, and Markdown record all show `outcome=FIXED`, with real token counts from the configured providers.
+- Latest validation: `pr-quantity-002` on `demo/fault/quantity-division-by-zero` confirmed GitHub PR, Feishu card, SSE completion payload, JSON record, and Markdown record all show `outcome=FIXED`.
 
 ## LangChain4j
 
@@ -155,7 +171,7 @@ mvn -pl target-service test
 REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_MAX_TOKENS=4096
-REPAIR_LLM_TIMEOUT_SECONDS=90
+REPAIR_LLM_TIMEOUT_SECONDS=180
 REPAIR_LLM_MAX_RETRIES=1
 REPAIR_LLM_REFLECTION_MODEL=
 REPAIR_MAX_PATCH_ATTEMPTS=2
@@ -165,6 +181,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 REPAIR_GIT_ENABLED=false
 REPAIR_GIT_REMOTE=origin
 REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero
+REPAIR_WORKTREE_ROOT=../agent-aiOps-worktrees
 REPAIR_GITHUB_ENABLED=false
 REPAIR_GITHUB_CLIENT=rest
 REPAIR_GITHUB_OWNER=
@@ -178,7 +195,7 @@ FEISHU_SIGNING_SECRET=
 
 For repair runs, `REPAIR_LLM_ENABLED=true`, either `OPENAI_API_KEY` or `DASHSCOPE_API_KEY`, and a model in local config or environment variables are required. If the model is unavailable or returns invalid typed `DiagnosisResult`/`RepairPlan`/`PatchProposal`/`RepairReflection` objects twice, the workflow publishes an `ERROR` event and writes a minimal error record instead of using a deterministic fallback. For OpenAI-compatible endpoints such as DeepSeek or Qwen, increase `REPAIR_LLM_TIMEOUT_SECONDS` if provider calls time out. Keep `REPAIR_LLM_MAX_RETRIES` low during demos so a slow model call does not stall the whole repair loop. For complex faults, keep `REPAIR_LLM_MAX_TOKENS` at `4096` or higher. The DAG trims traceback, source context, and tool event payloads before sending them to the AI sub-agents. The highest-value role-specific override is usually `repair.llm.patch-model`, since the patch agent both generates and rewrites code; `diagnosis-model`, `plan-model`, and `reflection-model` can stay on the default unless faults are ambiguous.
 
-For real PR creation, set `REPAIR_GITHUB_ENABLED=true` and provide `GITHUB_TOKEN`. For a fine-grained personal access token, grant repository access to `deibudei/agent-aiOps` and set `Contents: Read and write` plus `Pull requests: Read and write`; read-only PR permission causes GitHub HTTP 403 during PR creation. Owner/repo are auto-detected from `git remote get-url origin`; override them with `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` when running outside a checkout. The PR base branch defaults to `demo/fault/quantity-division-by-zero`; create/push that branch from current `main` with only the demo fault committed so each repair PR opens against a clean faulty baseline instead of `main`.
+For real PR creation, set `REPAIR_GITHUB_ENABLED=true` and provide `GITHUB_TOKEN`. For a fine-grained personal access token, grant repository access to `deibudei/agent-aiOps` and set `Contents: Read and write` plus `Pull requests: Read and write`; read-only PR permission causes GitHub HTTP 403 during PR creation. Owner/repo are auto-detected from `git remote get-url origin`; override them with `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` when running outside a checkout. The PR base branch defaults to `demo/fault/quantity-division-by-zero`; create/push that branch from current `main` with only the demo fault committed so each repair PR opens against a clean faulty baseline instead of `main`. `REPAIR_WORKTREE_ROOT` must point outside the main checkout.
 
 For real Feishu delivery, set `FEISHU_ENABLED=true`, `FEISHU_WEBHOOK_URL`, and (if the bot enforces signature verification) `FEISHU_SIGNING_SECRET`. The card embeds the PR URL as a button and shows total duration plus token usage when the provider returns usage metadata; if usage is unavailable, the card explicitly says so.
 
@@ -251,7 +268,7 @@ Supported fault types:
 
 The scenario API turns the manual competition flow into a backend state machine while keeping source-level fault injection. It still pauses for an operator restart because injected Java source is not hot-reloaded by the running `target-service` process.
 
-Source-injection scenarios intentionally dirty the local working tree, so they require `REPAIR_GIT_ENABLED=false`. Use them for local repair/test/record/Feishu validation. For a real GitHub PR demo, use the committed `demo/fault/...` base branch and call `POST /api/repair/run` directly.
+Source-injection scenarios intentionally dirty the local working tree, so they require `REPAIR_GIT_ENABLED=false`. Use them for local repair/test/record/Feishu validation. For a real GitHub PR demo, use the committed `demo/fault/...` base branch and the PR-safe scenario API below.
 
 ```powershell
 $body = @{ sessionId = "scenario-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
@@ -267,14 +284,14 @@ Invoke-RestMethod -Uri "http://localhost:9901/api/demo/scenarios/scenario-quanti
 
 ### One-Click Demo + PR
 
-Use the PR-safe scenario API when the demo must also create a GitHub PR. This path does not inject source into the current working tree. It prepares `repair/{sessionId}` from the configured committed fault base branch, waits for a manual target-service restart, then starts the normal repair workflow.
+Use the PR-safe scenario API when the demo must also create a GitHub PR. This path does not inject source into the current working tree and does not switch the main checkout. It prepares `repair/{sessionId}` in an isolated worktree from the configured committed fault base branch, waits for a manual target-service restart from that worktree, then starts the normal repair workflow inside that worktree.
 
 Requirements:
 
-- Clean working tree.
 - `REPAIR_GIT_ENABLED=true`
 - `REPAIR_GITHUB_ENABLED=true`
 - `REPAIR_BASE_BRANCH=demo/fault/{faultType}`
+- `REPAIR_WORKTREE_ROOT` points outside the main checkout.
 - A committed fault base branch exists locally or on the configured remote.
 
 Fault-to-branch mapping:
@@ -291,11 +308,26 @@ $env:REPAIR_GITHUB_ENABLED="true"
 $env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
 
 $body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+$scenario = Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
 
-# Restart target-service after WAITING_FOR_TARGET_RESTART.
+# Restart target-service from $scenario.worktreePath after WAITING_FOR_TARGET_RESTART.
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
 ```
+
+The target-service terminal should run from the returned worktree path:
+
+```powershell
+Push-Location $scenario.worktreePath
+mvn -pl target-service spring-boot:run
+```
+
+Watch the repair stream from another terminal:
+
+```powershell
+curl.exe -N "http://localhost:9901/api/repair/stream/pr-quantity-001"
+```
+
+The successful completion should report `outcome=FIXED`, a pushed `repair/pr-quantity-001` branch, a GitHub PR URL, a Feishu success card, and `repair-records/pr-quantity-001.json` / `.md`.
 
 For the other two faults, first create and push `demo/fault/wrong-quote-route` and `demo/fault/wrong-error-status` with only that fault committed. Then restart `agent-platform` with the matching `REPAIR_BASE_BRANCH` before calling `/api/demo/pr-scenarios/start`.
 

@@ -18,6 +18,7 @@ import org.example.agentaiops.repair.model.RepairOutcome;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.model.ToolExecutionResult;
 import org.example.agentaiops.repair.tool.RepairRecordTools;
+import org.example.agentaiops.repair.tool.RepairWorkspaceContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -29,7 +30,8 @@ class RepairWorkflowServiceTest {
         AgenticRepairRunner runner = mock(AgenticRepairRunner.class);
         RepairRecordTools recordTools = mock(RepairRecordTools.class);
         when(recordTools.writeRecord(any())).thenReturn(ToolExecutionResult.success("ok"));
-        RepairWorkflowService service = new RepairWorkflowService(eventHub, runner, recordTools, Runnable::run);
+        RepairWorkflowService service = new RepairWorkflowService(
+                eventHub, runner, recordTools, new RepairWorkspaceContext(), Runnable::run);
 
         when(runner.available()).thenReturn(false);
 
@@ -54,7 +56,8 @@ class RepairWorkflowServiceTest {
         AgenticRepairRunner runner = mock(AgenticRepairRunner.class);
         RepairRecordTools recordTools = mock(RepairRecordTools.class);
         when(recordTools.writeRecord(any())).thenReturn(ToolExecutionResult.success("ok"));
-        RepairWorkflowService service = new RepairWorkflowService(eventHub, runner, recordTools, Runnable::run);
+        RepairWorkflowService service = new RepairWorkflowService(
+                eventHub, runner, recordTools, new RepairWorkspaceContext(), Runnable::run);
 
         when(runner.available()).thenReturn(true);
         doThrow(new IllegalStateException("model returned invalid patch"))
@@ -82,7 +85,8 @@ class RepairWorkflowServiceTest {
         RepairEventHub eventHub = mock(RepairEventHub.class);
         AgenticRepairRunner runner = mock(AgenticRepairRunner.class);
         RepairRecordTools recordTools = mock(RepairRecordTools.class);
-        RepairWorkflowService service = new RepairWorkflowService(eventHub, runner, recordTools, Runnable::run);
+        RepairWorkflowService service = new RepairWorkflowService(
+                eventHub, runner, recordTools, new RepairWorkspaceContext(), Runnable::run);
 
         assertThatThrownBy(() -> service.startAsync("../escape"))
                 .isInstanceOf(ResponseStatusException.class)

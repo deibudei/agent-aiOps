@@ -5,79 +5,100 @@ import java.nio.file.Paths;
 import java.nio.file.Files;
 import java.util.List;
 import org.example.agentaiops.config.RepairProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
 public class ToolPolicy {
 
-    private final Path workspaceRoot;
-    private final Path targetRoot;
-    private final Path targetSourceRoot;
-    private final Path targetMainRoot;
-    private final Path targetTestRoot;
-    private final Path targetLogsRoot;
+    private final RepairProperties properties;
+    private final RepairWorkspaceContext workspaceContext;
+    private final Path homeWorkspaceRoot;
 
     /** Computes all read/write boundaries from repair configuration. */
-    public ToolPolicy(RepairProperties properties) {
-        this.workspaceRoot = discoverWorkspaceRoot(properties.getWorkspaceRoot());
-        this.targetRoot = resolveTargetRoot(properties.getTargetProject().getRootPath());
-        this.targetSourceRoot = targetRoot.resolve("src").normalize();
-        this.targetMainRoot = targetRoot.resolve("src/main").normalize();
-        this.targetTestRoot = targetRoot.resolve("src/test").normalize();
-        this.targetLogsRoot = targetRoot.resolve("logs").normalize();
+    @Autowired
+    public ToolPolicy(RepairProperties properties, RepairWorkspaceContext workspaceContext) {
+        this.properties = properties;
+        this.workspaceContext = workspaceContext;
+        this.homeWorkspaceRoot = discoverWorkspaceRoot(Paths.get(properties.getWorkspaceRoot()));
     }
 
-    /** Returns the detected repository root. */
+    /** Test-friendly constructor without a Spring context. */
+    public ToolPolicy(RepairProperties properties) {
+        this(properties, new RepairWorkspaceContext());
+    }
+
+    /** Returns the active repository root, or the launch repository root when no repair worktree is active. */
     public Path workspaceRoot() {
-        return workspaceRoot;
+        return workspaceContext.activeWorkspaceRoot()
+                .map(this::discoverWorkspaceRoot)
+                .orElse(homeWorkspaceRoot);
+    }
+
+    /** Returns the launch repository root used for shared records and worktree management. */
+    public Path homeWorkspaceRoot() {
+        return homeWorkspaceRoot;
     }
 
     /** Returns the target service module root. */
     public Path targetRoot() {
-        return targetRoot;
+        return resolveTargetRoot(properties.getTargetProject().getRootPath(), workspaceRoot());
     }
 
     /** Returns the target service log directory. */
     public Path targetLogsRoot() {
-        return targetLogsRoot;
+        return targetRoot().resolve("logs").normalize();
     }
 
     /** Resolves a path for safe reads from source, logs, or target pom.xml. */
     public Path resolveForRead(String path) {
         Path resolved = resolveTargetAware(path);
-        ensureUnderAny(resolved, List.of(targetSourceRoot, targetLogsRoot, targetRoot.resolve("pom.xml")));
+        Path targetRoot = targetRoot();
+        ensureUnderAny(resolved, List.of(
+                targetRoot.resolve("src").normalize(),
+                targetRoot.resolve("logs").normalize(),
+                targetRoot.resolve("pom.xml").normalize()));
         return resolved;
     }
 
     /** Resolves a path for safe writes under target-service src/main or src/test. */
     public Path resolveForWrite(String path) {
         Path resolved = resolveTargetAware(path);
-        ensureUnderAny(resolved, List.of(targetMainRoot, targetTestRoot));
+        Path targetRoot = targetRoot();
+        ensureUnderAny(resolved, List.of(
+                targetRoot.resolve("src/main").normalize(),
+                targetRoot.resolve("src/test").normalize()));
         return resolved;
     }
 
     /** Checks whether a changed file is allowed to appear in a repair diff. */
     public boolean isAllowedChangedFile(String fileName) {
         Path resolved = resolveTargetAware(fileName);
-        return startsWith(resolved, targetMainRoot) || startsWith(resolved, targetTestRoot);
+        Path targetRoot = targetRoot();
+        return startsWith(resolved, targetRoot.resolve("src/main"))
+                || startsWith(resolved, targetRoot.resolve("src/test"));
     }
 
     /** Converts an absolute path to a repo-relative display path when possible. */
     public String display(Path path) {
         Path normalized = path.toAbsolutePath().normalize();
-        if (startsWith(normalized, workspaceRoot)) {
-            return workspaceRoot.relativize(normalized).toString().replace('\\', '/');
+        Path activeRoot = workspaceRoot();
+        if (startsWith(normalized, activeRoot)) {
+            return activeRoot.relativize(normalized).toString().replace('\\', '/');
+        }
+        if (startsWith(normalized, homeWorkspaceRoot)) {
+            return homeWorkspaceRoot.relativize(normalized).toString().replace('\\', '/');
         }
         return normalized.toString();
     }
 
     /** Resolves the configured target root, including sibling fallback for module launches. */
-    private Path resolveTargetRoot(String configuredRoot) {
-        Path direct = resolveWorkspacePath(configuredRoot);
+    private Path resolveTargetRoot(String configuredRoot, Path root) {
+        Path direct = resolveWorkspacePath(configuredRoot, root);
         if (direct.toFile().exists()) {
             return direct;
         }
-        Path sibling = workspaceRoot.resolve("..").resolve(configuredRoot).toAbsolutePath().normalize();
+        Path sibling = root.resolve("..").resolve(configuredRoot).toAbsolutePath().normalize();
         if (sibling.toFile().exists()) {
             return sibling;
         }
@@ -91,7 +112,9 @@ public class ToolPolicy {
             return raw.normalize();
         }
 
-        Path fromWorkspace = resolveWorkspacePath(path);
+        Path activeWorkspaceRoot = workspaceRoot();
+        Path targetRoot = targetRoot();
+        Path fromWorkspace = resolveWorkspacePath(path, activeWorkspaceRoot);
         if (startsWith(fromWorkspace, targetRoot)) {
             return fromWorkspace;
         }
@@ -108,8 +131,8 @@ public class ToolPolicy {
     }
 
     /** Detects the repo root even when agent-platform is launched from its module directory. */
-    private Path discoverWorkspaceRoot(String configuredRoot) {
-        Path configured = Paths.get(configuredRoot).toAbsolutePath().normalize();
+    private Path discoverWorkspaceRoot(Path configuredRoot) {
+        Path configured = configuredRoot.toAbsolutePath().normalize();
         if (isWorkspaceRoot(configured)) {
             return configured;
         }
@@ -130,12 +153,12 @@ public class ToolPolicy {
     }
 
     /** Resolves a path relative to the repository root unless it is already absolute. */
-    private Path resolveWorkspacePath(String path) {
+    private Path resolveWorkspacePath(String path, Path root) {
         Path raw = Paths.get(path);
         if (raw.isAbsolute()) {
             return raw.normalize();
         }
-        return workspaceRoot.resolve(raw).toAbsolutePath().normalize();
+        return root.resolve(raw).toAbsolutePath().normalize();
     }
 
     /** Throws when a resolved path falls outside every allowed root. */

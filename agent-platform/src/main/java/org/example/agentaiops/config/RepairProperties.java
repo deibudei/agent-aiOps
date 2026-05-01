@@ -192,6 +192,7 @@ public class RepairProperties {
         private boolean enabled;
         private String remote = "origin";
         private String baseBranch = "demo/fault/quantity-division-by-zero";
+        private String worktreeRoot = "../agent-aiOps-worktrees";
 
         /** Returns whether local Git automation is enabled. */
         public boolean isEnabled() {
@@ -221,6 +222,16 @@ public class RepairProperties {
         /** Updates the PR base branch. */
         public void setBaseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
+        }
+
+        /** Returns the parent directory used for isolated repair worktrees. */
+        public String getWorktreeRoot() {
+            return worktreeRoot;
+        }
+
+        /** Updates the parent directory used for isolated repair worktrees. */
+        public void setWorktreeRoot(String worktreeRoot) {
+            this.worktreeRoot = worktreeRoot;
         }
     }
 

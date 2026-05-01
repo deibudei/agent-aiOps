@@ -4,9 +4,14 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.io.IOException;
 import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.repair.model.CommandResult;
 import org.example.agentaiops.repair.model.GitCommitResult;
+import org.example.agentaiops.repair.model.RepairWorktreeResult;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -155,6 +160,60 @@ public class GitTools {
                 "Prepared " + branchName + " from " + baseBranch);
     }
 
+    /** Prepares an isolated repair worktree from the configured committed demo fault base branch. */
+    public RepairWorktreeResult prepareRepairWorktreeFromBase(String sessionId) {
+        if (!properties.getGit().isEnabled()) {
+            return new RepairWorktreeResult(false, "", "", "Git is disabled; cannot prepare PR demo worktree");
+        }
+        String baseBranch = properties.getGit().getBaseBranch();
+        if (!hasText(baseBranch)) {
+            return new RepairWorktreeResult(false, "", "", "repair.git.base-branch is empty");
+        }
+
+        String branchName = "repair/" + sanitize(sessionId);
+        Path worktreePath;
+        try {
+            worktreePath = worktreePath(sessionId);
+            if (Files.exists(worktreePath)) {
+                return new RepairWorktreeResult(
+                        false,
+                        branchName,
+                        worktreePath.toString(),
+                        "Repair worktree already exists: " + worktreePath);
+            }
+            Files.createDirectories(worktreePath.getParent());
+        } catch (IOException | IllegalArgumentException e) {
+            return new RepairWorktreeResult(false, branchName, "", e.getMessage());
+        }
+
+        CommandResult fetch = runGitAt(toolPolicy.homeWorkspaceRoot(), "fetch", properties.getGit().getRemote(), baseBranch);
+        if (!fetch.success()) {
+            return failedWorktree(branchName, worktreePath, fetch);
+        }
+
+        String remoteBase = properties.getGit().getRemote() + "/" + baseBranch;
+        CommandResult add = runGitAt(
+                toolPolicy.homeWorkspaceRoot(),
+                "worktree", "add", "-B", branchName, worktreePath.toString(), remoteBase);
+        if (!add.success()) {
+            CommandResult fallback = runGitAt(
+                    toolPolicy.homeWorkspaceRoot(),
+                    "worktree", "add", "-B", branchName, worktreePath.toString(), baseBranch);
+            if (!fallback.success()) {
+                return new RepairWorktreeResult(
+                        false,
+                        branchName,
+                        worktreePath.toString(),
+                        add.output() + System.lineSeparator() + fallback.output());
+            }
+        }
+        return new RepairWorktreeResult(
+                true,
+                branchName,
+                worktreePath.toString(),
+                "Prepared " + branchName + " in " + worktreePath + " from " + baseBranch);
+    }
+
     private GitCommitResult failed(String branchName, String commitMessage, CommandResult commandResult) {
         return new GitCommitResult(false, branchName, commitMessage, commandResult.output());
     }
@@ -170,11 +229,16 @@ public class GitTools {
 
     /** Runs a git command from the repository root. */
     private CommandResult runGit(String... args) {
+        return runGitAt(toolPolicy.workspaceRoot(), args);
+    }
+
+    /** Runs a git command from a specific repository root. */
+    private CommandResult runGitAt(Path workspaceRoot, String... args) {
         List<String> command = new ArrayList<>();
         command.add("git");
         command.addAll(List.of(args));
         return commandRunner.run(
-                toolPolicy.workspaceRoot(),
+                workspaceRoot,
                 command,
                 Duration.ofSeconds(properties.getWorkflow().getProcessTimeoutSeconds()));
     }
@@ -198,5 +262,33 @@ public class GitTools {
             return false;
         }
         return parseChangedFiles(result.output()).isEmpty();
+    }
+
+    private RepairWorktreeResult failedWorktree(
+            String branchName, Path worktreePath, CommandResult commandResult) {
+        return new RepairWorktreeResult(false, branchName, worktreePath.toString(), commandResult.output());
+    }
+
+    private Path worktreePath(String sessionId) {
+        Path root = resolveWorktreeRoot();
+        Path candidate = root.resolve(sanitize(sessionId)).toAbsolutePath().normalize();
+        if (!candidate.startsWith(root)) {
+            throw new IllegalArgumentException("Repair worktree path escapes worktree root: " + candidate);
+        }
+        return candidate;
+    }
+
+    private Path resolveWorktreeRoot() {
+        String configured = properties.getGit().getWorktreeRoot();
+        Path raw = Paths.get(configured == null || configured.isBlank()
+                ? "../agent-aiOps-worktrees"
+                : configured);
+        Path root = raw.isAbsolute()
+                ? raw.toAbsolutePath().normalize()
+                : toolPolicy.homeWorkspaceRoot().resolve(raw).toAbsolutePath().normalize();
+        if (root.equals(toolPolicy.homeWorkspaceRoot()) || root.startsWith(toolPolicy.homeWorkspaceRoot())) {
+            throw new IllegalArgumentException("Repair worktree root must be outside the main workspace: " + root);
+        }
+        return root;
     }
 }

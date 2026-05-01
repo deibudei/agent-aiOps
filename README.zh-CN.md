@@ -40,7 +40,7 @@
 - Reflexion：`repair.workflow.max-patch-attempts` 控制重写次数（默认 2）。一次补丁应用前会先快照原文件内容，测试失败后回滚到该快照再重新生成补丁，避免错叠多份补丁。
 - GitHub 集成：默认走 GitHub REST API（`repair.github.client=rest`），不依赖 `gh CLI`。Owner/Repo 优先读 `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO`，未配置时自动从 `git remote get-url origin` 解析 HTTPS/SSH URL。
 - 飞书 v2 卡片：成功修复和失败修复使用不同标题/文案，卡片内容包括根因摘要、Review 结论、PR 链接、总耗时、token 消耗（provider 返回 usage 时展示真实值，否则明确显示未返回/未采集，不再显示 0），并提供「查看 PR」按钮和会话 footer；如果配置 `FEISHU_SIGNING_SECRET`，请求体会带上 `timestamp` + `sign` 校验。
-- 已验证：`e2e-token-2` 在已提交故障的 `demo/fault/quantity-division-by-zero` base 分支上跑通完整比赛链路：读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review、push `repair/e2e-token-2`、创建 GitHub PR [#2](https://github.com/deibudei/agent-aiOps/pull/2)、发送飞书「已修复，请 Review」卡片，并写入 `repair-records/e2e-token-2.json` / `.md`，最终 `outcome=FIXED`。本次耗时约 96.1 秒，并记录到真实模型用量：input 47031 / output 6073 / total 53104 tokens。
+- 已验证：`pr-quantity-002` 通过 PR-safe 一键 Demo 在已提交故障的 `demo/fault/quantity-division-by-zero` base 分支上跑通完整比赛链路：读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review、push `repair/pr-quantity-002`、创建 GitHub PR [#3](https://github.com/deibudei/agent-aiOps/pull/3)、发送飞书「已修复，请 Review」卡片，并写入 `repair-records/pr-quantity-002.json` / `.md`，最终 `outcome=FIXED`。
 - 当前限制：修复运行必须配置 `REPAIR_LLM_ENABLED=true` 和对应 provider API key；模型不可用或结构化输出连续两次非法会发布 `ERROR`，并写入最小错误记录，不再走确定性 fallback。写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
 
 ## 当前实现状态与下一步
@@ -79,6 +79,22 @@ $env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
 ```
 
 这样 PR 会从 `repair/{sessionId}` 指向 `demo/fault/quantity-division-by-zero`，diff 只展示 Agent 把故障代码修回正确代码。旧的 `repair-demo-target` 不再作为比赛主演示 base，因为它可能落后当前 `main` 太多。
+PR-safe scenario 会在 `REPAIR_WORKTREE_ROOT` 下创建独立 git worktree 承载 `repair/{sessionId}`，所以主工作区可以一直停在 `main`，修复分支在独立目录里完成补丁、测试、commit 和 push。
+
+PR-safe scenario 的运行心智模型：
+
+```text
+1. 先在 main 上启动 agent-platform。
+2. POST /api/demo/pr-scenarios/start 会从 demo/fault/{faultType}
+   在 REPAIR_WORKTREE_ROOT/{sessionId} 创建 repair/{sessionId} worktree。
+3. 只从这个 worktree 路径重启 target-service，让它加载故障代码。
+4. POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted。
+5. agent-platform 是已经启动的 JVM，继续使用 main 编译出的编排代码；
+   但修复工具读写和测试的是独立 worktree 下的 target-service。
+6. 测试通过后 commit、push repair/{sessionId}，创建 GitHub PR，并发送飞书。
+```
+
+在 SSE 出现 `completed`、`repair-records/{sessionId}.json` / `.md` 写完之前，不要删除 active worktree、删除 `repair/{sessionId}`、重启 `agent-platform`，也不要编辑 README 或平台代码。演示完成后再清理一次性 `repair/*` 分支和 worktree。
 
 后续项目更新仍然在 `main` 或面向 `main` 的普通 feature 分支上做，不要在 `demo/fault/...` 或 `repair/{sessionId}` 分支上改文档/平台代码。`main` 更新后，需要从最新 `main` 刷新 demo 故障分支，并让这条分支只保留一个“故障注入”提交；`repair/{sessionId}` 分支只是每次演示的自动修复产物，用完即可关闭或删除。
 
@@ -118,7 +134,7 @@ git push --force-with-lease origin demo/fault/quantity-division-by-zero
 验收方式：
 
 - `mvn -pl agent-platform test`
-- 最新验收：`e2e-token-2` 已在 `demo/fault/quantity-division-by-zero` 上确认 GitHub PR、飞书卡片、SSE、JSON 记录和 Markdown 记录都显示 `outcome=FIXED`，并记录到 provider 返回的真实 token 消耗。
+- 最新验收：`pr-quantity-002` 已在 `demo/fault/quantity-division-by-zero` 上确认 GitHub PR、飞书卡片、SSE、JSON 记录和 Markdown 记录都显示 `outcome=FIXED`。
 
 ## LangChain4j 集成说明
 
@@ -330,7 +346,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset
 
 `agent-platform` 还提供一组 scenario API，用于把“选择故障 -> 注入源码 -> 人工重启确认 -> 准备证据 -> 启动 Agent 修复 -> SSE 追踪 -> 修复记录索引”串成比赛演示流程。第一版仍保留源码级故障注入，所以注入后需要人工重启 `target-service`。
 
-注意：源码注入型 scenario 会制造本地 dirty working tree，因此要求 `REPAIR_GIT_ENABLED=false`。它适合验证 Agent 修复、测试、记录和飞书本地演示；真实 GitHub PR 演示应使用已提交的 `demo/fault/...` base 分支，然后直接调用 `POST /api/repair/run`。
+注意：源码注入型 scenario 会制造本地 dirty working tree，因此要求 `REPAIR_GIT_ENABLED=false`。它适合验证 Agent 修复、测试、记录和飞书本地演示；真实 GitHub PR 演示应使用已提交的 `demo/fault/...` base 分支和下面的 PR-safe scenario API。
 
 启动一个场景：
 
@@ -375,10 +391,10 @@ wrong-error-status        -> demo/fault/wrong-error-status
 
 运行前要求：
 
-- 工作区必须 clean；未提交的文档、平台代码或 target-service 改动都会阻止切分支。
 - `REPAIR_GIT_ENABLED=true`
 - `REPAIR_GITHUB_ENABLED=true`
 - `REPAIR_BASE_BRANCH` 必须等于当前故障类型对应的 `demo/fault/{faultType}`。
+- `REPAIR_WORKTREE_ROOT` 指向主仓库外部目录。
 - 对应的 `demo/fault/{faultType}` 分支必须已经存在于本地或远端，并且只包含这一个故障。
 
 以除零故障为例：
@@ -389,14 +405,29 @@ $env:REPAIR_GITHUB_ENABLED="true"
 $env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
 
 $body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+$scenario = Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
 ```
 
-返回 `WAITING_FOR_TARGET_RESTART` 后，重启 `target-service`，然后：
+返回 `WAITING_FOR_TARGET_RESTART` 后，要从返回的 `$scenario.worktreePath` 目录重启 `target-service`：
+
+```powershell
+Push-Location $scenario.worktreePath
+mvn -pl target-service spring-boot:run
+```
+
+确认故障服务已从 worktree 重启后：
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
 ```
+
+在另一个终端查看 SSE：
+
+```powershell
+curl.exe -N "http://localhost:9901/api/repair/stream/pr-quantity-001"
+```
+
+成功完成时应看到 `outcome=FIXED`、`repair/pr-quantity-001` 已 push、GitHub PR URL、飞书成功卡片，以及 `repair-records/pr-quantity-001.json` / `.md`。
 
 另外两个故障不要用同一个 base 分支混跑。先准备对应故障分支，再改 `REPAIR_BASE_BRANCH` 并重启 `agent-platform`：
 
@@ -421,6 +452,8 @@ REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_TEMPERATURE=0.1
 REPAIR_LLM_MAX_TOKENS=4096
+REPAIR_LLM_TIMEOUT_SECONDS=180
+REPAIR_LLM_MAX_RETRIES=1
 REPAIR_LLM_REFLECTION_MODEL=
 REPAIR_MAX_PATCH_ATTEMPTS=2
 
@@ -438,6 +471,7 @@ DASHSCOPE_BASE_URL=
 REPAIR_GIT_ENABLED=false
 REPAIR_GIT_REMOTE=origin
 REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero
+REPAIR_WORKTREE_ROOT=../agent-aiOps-worktrees
 
 REPAIR_GITHUB_ENABLED=false
 REPAIR_GITHUB_CLIENT=rest
@@ -500,7 +534,8 @@ repair:
 - `REPAIR_GIT_ENABLED=false` 时，不会创建分支、commit 或 push。
 - `REPAIR_GITHUB_ENABLED=false` 时，不会调用 GitHub API 创建 PR。
 - `FEISHU_ENABLED=false` 时，不会发送飞书卡片。
-- 默认 base 分支是 `demo/fault/quantity-division-by-zero`：这条分支应从当前 `main` 创建，只提交一个除零故障。每次真实 PR 演示都会从这条分支切出 `repair/{sessionId}` 子分支并向其发起 PR，避免直接对抗 `main`，也避免修回 `main` 后没有 diff。
+- 默认 base 分支是 `demo/fault/quantity-division-by-zero`：这条分支应从当前 `main` 创建，只提交一个除零故障。每次真实 PR 演示都会从这条分支在 `REPAIR_WORKTREE_ROOT/{sessionId}` 创建 `repair/{sessionId}` worktree 并向 base 发起 PR，避免直接对抗 `main`，也避免修回 `main` 后没有 diff。
+- `REPAIR_WORKTREE_ROOT` 必须指向主仓库外部目录；默认是 `../agent-aiOps-worktrees`。
 - 开启真实 PR 时，默认 `REPAIR_GITHUB_CLIENT=rest`，不需要安装 `gh CLI`；如需走 CLI，可设 `REPAIR_GITHUB_CLIENT=cli`。`GITHUB_TOKEN` 如果使用 fine-grained personal access token，Repository access 必须包含 `deibudei/agent-aiOps`，Repository permissions 至少需要 `Contents: Read and write` 和 `Pull requests: Read and write`。只有 PR/code 读权限会在创建 PR 时返回 GitHub HTTP 403。
 - `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` 留空时，会从 `git remote get-url origin` 自动解析。
 - 飞书 v2 卡片可选签名校验：在群机器人开启签名校验后填 `FEISHU_SIGNING_SECRET` 即可。

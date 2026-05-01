@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Pattern;
 import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairRecord;
@@ -33,7 +34,7 @@ public class RepairRecordTools {
     /** Writes the repair record as both JSON for machines and Markdown for demos. */
     public ToolExecutionResult writeRecord(RepairRecord record) {
         try {
-            Path recordsDir = toolPolicy.workspaceRoot().resolve("repair-records").normalize();
+            Path recordsDir = recordsDir();
             Files.createDirectories(recordsDir);
             String safeSessionId = safeSessionId(record.sessionId());
             Path jsonPath = ensureUnderRecords(recordsDir, recordsDir.resolve(safeSessionId + ".json"));
@@ -49,7 +50,7 @@ public class RepairRecordTools {
 
     /** Lists compact repair record summaries sorted by newest completion time. */
     public RepairRecordIndex listRecordSummaries() {
-        Path recordsDir = toolPolicy.workspaceRoot().resolve("repair-records").normalize();
+        Path recordsDir = recordsDir();
         if (!Files.isDirectory(recordsDir)) {
             return new RepairRecordIndex(0, List.of());
         }
@@ -70,6 +71,29 @@ public class RepairRecordTools {
         }
     }
 
+    /** Reads one repair record from the shared repair-records directory. */
+    public Optional<RepairRecord> readRecord(String sessionId) {
+        try {
+            Path path = jsonPath(sessionId);
+            if (!Files.isRegularFile(path)) {
+                return Optional.empty();
+            }
+            return Optional.of(objectMapper.readValue(path.toFile(), RepairRecord.class));
+        } catch (IOException | IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** Returns the display path for one JSON repair record. */
+    public String jsonRecordPath(String sessionId) {
+        return toolPolicy.display(jsonPath(sessionId));
+    }
+
+    /** Returns the display path for one Markdown repair record. */
+    public String markdownRecordPath(String sessionId) {
+        return toolPolicy.display(markdownPath(sessionId));
+    }
+
     private RepairRecordSummary readSummary(Path path) {
         try {
             RepairRecord record = objectMapper.readValue(path.toFile(), RepairRecord.class);
@@ -77,6 +101,22 @@ public class RepairRecordTools {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    private Path recordsDir() {
+        return toolPolicy.homeWorkspaceRoot().resolve("repair-records").normalize();
+    }
+
+    private Path jsonPath(String sessionId) {
+        String safeSessionId = safeSessionId(sessionId);
+        Path recordsDir = recordsDir();
+        return ensureUnderRecords(recordsDir, recordsDir.resolve(safeSessionId + ".json"));
+    }
+
+    private Path markdownPath(String sessionId) {
+        String safeSessionId = safeSessionId(sessionId);
+        Path recordsDir = recordsDir();
+        return ensureUnderRecords(recordsDir, recordsDir.resolve(safeSessionId + ".md"));
     }
 
     private RepairRecordSummary toSummary(RepairRecord record, String recordPath) {

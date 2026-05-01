@@ -19,11 +19,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import org.example.agentaiops.config.RepairProperties;
-import org.example.agentaiops.repair.model.GitCommitResult;
+import org.example.agentaiops.repair.model.RepairOutcome;
+import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairRunResponse;
+import org.example.agentaiops.repair.model.RepairWorktreeResult;
 import org.example.agentaiops.repair.model.TestExecutionResult;
 import org.example.agentaiops.repair.service.RepairWorkflowService;
 import org.example.agentaiops.repair.tool.GitTools;
+import org.example.agentaiops.repair.tool.RepairRecordTools;
+import org.example.agentaiops.repair.tool.RepairWorkspaceContext;
 import org.example.agentaiops.repair.tool.RunTestTools;
 import org.example.agentaiops.repair.tool.ToolPolicy;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,6 +52,8 @@ public class DemoScenarioService {
     private final ToolPolicy toolPolicy;
     private final RepairProperties properties;
     private final GitTools gitTools;
+    private final RepairRecordTools repairRecordTools;
+    private final RepairWorkspaceContext workspaceContext;
     private final HttpClient httpClient;
 
     /** Wires the local one-click demo scenario orchestration service. */
@@ -58,6 +64,8 @@ public class DemoScenarioService {
             RunTestTools runTestTools,
             ToolPolicy toolPolicy,
             GitTools gitTools,
+            RepairRecordTools repairRecordTools,
+            RepairWorkspaceContext workspaceContext,
             RepairProperties properties) {
         this(
                 demoFaultService,
@@ -65,6 +73,8 @@ public class DemoScenarioService {
                 runTestTools,
                 toolPolicy,
                 gitTools,
+                repairRecordTools,
+                workspaceContext,
                 properties,
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build());
     }
@@ -75,6 +85,8 @@ public class DemoScenarioService {
             RunTestTools runTestTools,
             ToolPolicy toolPolicy,
             GitTools gitTools,
+            RepairRecordTools repairRecordTools,
+            RepairWorkspaceContext workspaceContext,
             RepairProperties properties,
             HttpClient httpClient) {
         this.demoFaultService = demoFaultService;
@@ -82,6 +94,8 @@ public class DemoScenarioService {
         this.runTestTools = runTestTools;
         this.toolPolicy = toolPolicy;
         this.gitTools = gitTools;
+        this.repairRecordTools = repairRecordTools;
+        this.workspaceContext = workspaceContext;
         this.properties = properties;
         this.httpClient = httpClient;
     }
@@ -114,6 +128,13 @@ public class DemoScenarioService {
                     waitingNextSteps(sessionId),
                     null,
                     targetServiceBaseUrl(),
+                    "",
+                    "",
+                    "",
+                    "",
+                    null,
+                    "",
+                    "",
                     "");
         } else {
             result = new DemoScenarioResult(
@@ -126,6 +147,13 @@ public class DemoScenarioService {
                     injected.nextSteps(),
                     null,
                     targetServiceBaseUrl(),
+                    "",
+                    "",
+                    "",
+                    "",
+                    null,
+                    "",
+                    "",
                     "");
         }
 
@@ -140,13 +168,14 @@ public class DemoScenarioService {
     public DemoScenarioResult get(String sessionId) {
         String safeSessionId = validateSessionId(sessionId);
         DemoScenarioResult result = scenarios.get(safeSessionId);
-        if (result == null) {
-            result = pullRequestScenarios.get(safeSessionId);
+        if (result != null) {
+            return refreshFromRecord(scenarios, safeSessionId, result);
         }
+        result = pullRequestScenarios.get(safeSessionId);
         if (result == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo scenario not found: " + sessionId);
         }
-        return result;
+        return refreshFromRecord(pullRequestScenarios, safeSessionId, result);
     }
 
     /** Confirms the manual restart, prepares fresh evidence, and starts the repair workflow. */
@@ -177,7 +206,7 @@ public class DemoScenarioService {
         RepairRunResponse repair = repairWorkflowService.startAsync(safeSessionId);
         DemoScenarioResult started = copy(
                 current,
-                DemoScenarioStage.REPAIR_STARTED,
+                DemoScenarioStage.RUNNING,
                 true,
                 "Evidence prepared and repair workflow started.",
                 List.of(
@@ -213,7 +242,7 @@ public class DemoScenarioService {
                             + configuredBaseBranch);
         }
 
-        GitCommitResult prepared = gitTools.prepareRepairBranchFromBase(sessionId);
+        RepairWorktreeResult prepared = gitTools.prepareRepairWorktreeFromBase(sessionId);
         if (!prepared.success()) {
             DemoScenarioResult failed = new DemoScenarioResult(
                     sessionId,
@@ -223,10 +252,17 @@ public class DemoScenarioService {
                     prepared.message(),
                     List.of(),
                     List.of(
-                            "Commit, stash, or reset local changes before PR demo scenarios.",
+                            "Use a new sessionId if this worktree already exists.",
                             "Ensure " + configuredBaseBranch + " exists locally or on the configured remote."),
                     null,
                     targetServiceBaseUrl(),
+                    "",
+                    prepared.branchName(),
+                    prepared.worktreePath(),
+                    "",
+                    null,
+                    "",
+                    "",
                     "");
             pullRequestScenarios.put(sessionId, failed);
             return failed;
@@ -239,12 +275,20 @@ public class DemoScenarioService {
                 true,
                 "Prepared " + prepared.branchName()
                         + " from " + configuredBaseBranch
-                        + ". Restart target-service, then confirm the scenario.",
+                        + " in " + prepared.worktreePath()
+                        + ". Restart target-service from that worktree, then confirm the scenario.",
                 List.of(),
-                waitingPullRequestNextSteps(sessionId),
+                waitingPullRequestNextSteps(sessionId, prepared.worktreePath()),
                 null,
                 targetServiceBaseUrl(),
-                "branch=" + prepared.branchName() + ", base=" + configuredBaseBranch);
+                "branch=" + prepared.branchName() + ", base=" + configuredBaseBranch,
+                prepared.branchName(),
+                prepared.worktreePath(),
+                "",
+                null,
+                "",
+                "",
+                "");
         pullRequestScenarios.put(sessionId, waiting);
         return waiting;
     }
@@ -262,6 +306,11 @@ public class DemoScenarioService {
                     "PR demo scenario is not waiting for target-service restart: " + safeSessionId);
         }
 
+        Path worktreeRoot = parseWorktreePath(current);
+        return workspaceContext.callWithWorkspace(worktreeRoot, () -> confirmPullRequestInWorkspace(safeSessionId, current));
+    }
+
+    private DemoScenarioResult confirmPullRequestInWorkspace(String safeSessionId, DemoScenarioResult current) {
         DemoFaultType type = parseFaultType(current.faultType());
         ScenarioEvidence evidence = prepareEvidence(safeSessionId, type);
         if (!evidence.success()) {
@@ -277,10 +326,10 @@ public class DemoScenarioService {
             return failed;
         }
 
-        RepairRunResponse repair = repairWorkflowService.startAsync(safeSessionId);
+        RepairRunResponse repair = repairWorkflowService.startAsync(safeSessionId, current.worktreePath());
         DemoScenarioResult started = copy(
                 current,
-                DemoScenarioStage.REPAIR_STARTED,
+                DemoScenarioStage.RUNNING,
                 true,
                 "Evidence prepared and PR repair workflow started.",
                 List.of(
@@ -455,9 +504,9 @@ public class DemoScenarioService {
         return steps;
     }
 
-    private List<String> waitingPullRequestNextSteps(String sessionId) {
+    private List<String> waitingPullRequestNextSteps(String sessionId, String worktreePath) {
         List<String> steps = new ArrayList<>();
-        steps.add("Restart target-service while the repository is on repair/" + sessionId + ".");
+        steps.add("Start or restart target-service from worktree: " + worktreePath);
         steps.add("POST /api/demo/pr-scenarios/" + sessionId + "/confirm-target-restarted");
         steps.add("Then watch GET /api/repair/stream/" + sessionId);
         return steps;
@@ -481,7 +530,77 @@ public class DemoScenarioService {
                 nextSteps,
                 repairStreamUrl,
                 current.targetServiceUrl(),
-                evidenceSummary);
+                evidenceSummary,
+                current.branchName(),
+                current.worktreePath(),
+                current.prUrl(),
+                current.notificationSuccess(),
+                current.recordJsonPath(),
+                current.recordMarkdownPath(),
+                current.outcomeReason());
+    }
+
+    private DemoScenarioResult refreshFromRecord(
+            Map<String, DemoScenarioResult> store, String sessionId, DemoScenarioResult current) {
+        if (current.stage() != DemoScenarioStage.RUNNING) {
+            return current;
+        }
+        return repairRecordTools.readRecord(sessionId)
+                .map(record -> {
+                    DemoScenarioResult updated = copyFromRecord(current, record);
+                    store.put(sessionId, updated);
+                    return updated;
+                })
+                .orElse(current);
+    }
+
+    private DemoScenarioResult copyFromRecord(DemoScenarioResult current, RepairRecord record) {
+        String prUrl = record.pullRequestResult() == null ? "" : record.pullRequestResult().url();
+        Boolean notificationSuccess = record.notificationResult() == null
+                ? null
+                : record.notificationResult().success();
+        String jsonPath = repairRecordTools.jsonRecordPath(current.sessionId());
+        String markdownPath = repairRecordTools.markdownRecordPath(current.sessionId());
+        return new DemoScenarioResult(
+                current.sessionId(),
+                current.faultType(),
+                stageFromOutcome(record.outcome()),
+                record.outcome() == RepairOutcome.FIXED,
+                record.outcomeReason(),
+                current.changedFiles(),
+                List.of(
+                        "Repair record: " + jsonPath,
+                        "Markdown report: " + markdownPath,
+                        prUrl == null || prUrl.isBlank() ? "PR was not created." : "PR: " + prUrl),
+                current.repairStreamUrl(),
+                current.targetServiceUrl(),
+                current.evidenceSummary(),
+                current.branchName(),
+                current.worktreePath(),
+                prUrl,
+                notificationSuccess,
+                jsonPath,
+                markdownPath,
+                record.outcomeReason());
+    }
+
+    private DemoScenarioStage stageFromOutcome(RepairOutcome outcome) {
+        if (outcome == RepairOutcome.FIXED) {
+            return DemoScenarioStage.FIXED;
+        }
+        if (outcome == RepairOutcome.ERROR) {
+            return DemoScenarioStage.ERROR;
+        }
+        return DemoScenarioStage.FAILED;
+    }
+
+    private Path parseWorktreePath(DemoScenarioResult current) {
+        if (current.worktreePath() == null || current.worktreePath().isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "PR demo scenario has no repair worktree path: " + current.sessionId());
+        }
+        return Path.of(current.worktreePath()).toAbsolutePath().normalize();
     }
 
     private String targetServiceBaseUrl() {

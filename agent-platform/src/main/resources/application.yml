@@ -36,6 +36,7 @@ repair:
     enabled: ${REPAIR_GIT_ENABLED:false}
     remote: ${REPAIR_GIT_REMOTE:origin}
     base-branch: ${REPAIR_BASE_BRANCH:demo/fault/quantity-division-by-zero}
+    worktree-root: ${REPAIR_WORKTREE_ROOT:../agent-aiOps-worktrees}
   github:
     enabled: ${REPAIR_GITHUB_ENABLED:false}
     client: ${REPAIR_GITHUB_CLIENT:rest}

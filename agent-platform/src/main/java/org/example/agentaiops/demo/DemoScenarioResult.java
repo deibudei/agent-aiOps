@@ -13,5 +13,12 @@ public record DemoScenarioResult(
         List<String> nextSteps,
         String repairStreamUrl,
         String targetServiceUrl,
-        String evidenceSummary) {
+        String evidenceSummary,
+        String branchName,
+        String worktreePath,
+        String prUrl,
+        Boolean notificationSuccess,
+        String recordJsonPath,
+        String recordMarkdownPath,
+        String outcomeReason) {
 }

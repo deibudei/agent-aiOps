@@ -2,6 +2,8 @@ package org.example.agentaiops.repair.service;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.UndeclaredThrowableException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -17,6 +19,7 @@ import org.example.agentaiops.repair.model.RepairRunResponse;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.model.RepairTiming;
 import org.example.agentaiops.repair.model.ToolExecutionResult;
+import org.example.agentaiops.repair.tool.RepairWorkspaceContext;
 import org.example.agentaiops.repair.tool.RepairRecordTools;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
@@ -31,6 +34,7 @@ public class RepairWorkflowService {
     private final RepairEventHub eventHub;
     private final AgenticRepairRunner agenticRepairRunner;
     private final RepairRecordTools repairRecordTools;
+    private final RepairWorkspaceContext workspaceContext;
     private final Executor repairTaskExecutor;
 
     /** Wires the Agentic repair workflow entrypoint. */
@@ -38,10 +42,12 @@ public class RepairWorkflowService {
             RepairEventHub eventHub,
             AgenticRepairRunner agenticRepairRunner,
             RepairRecordTools repairRecordTools,
+            RepairWorkspaceContext workspaceContext,
             @Qualifier("repairTaskExecutor") Executor repairTaskExecutor) {
         this.eventHub = eventHub;
         this.agenticRepairRunner = agenticRepairRunner;
         this.repairRecordTools = repairRecordTools;
+        this.workspaceContext = workspaceContext;
         this.repairTaskExecutor = repairTaskExecutor;
     }
 
@@ -52,6 +58,18 @@ public class RepairWorkflowService {
                 : validateSessionId(requestedSessionId);
         eventHub.publish(sessionId, RepairStage.DETECTING, "Repair workflow accepted");
         repairTaskExecutor.execute(() -> run(sessionId));
+        return new RepairRunResponse(sessionId, "started", "/api/repair/stream/" + sessionId);
+    }
+
+    /** Accepts an API request and runs the repair workflow in an isolated workspace. */
+    public RepairRunResponse startAsync(String requestedSessionId, String workspaceRoot) {
+        String sessionId = requestedSessionId == null || requestedSessionId.isBlank()
+                ? UUID.randomUUID().toString()
+                : validateSessionId(requestedSessionId);
+        Path activeWorkspace = validateWorkspaceRoot(workspaceRoot);
+        eventHub.publish(sessionId, RepairStage.DETECTING, "Repair workflow accepted",
+                Map.of("workspaceRoot", activeWorkspace.toString()));
+        repairTaskExecutor.execute(() -> workspaceContext.runWithWorkspace(activeWorkspace, () -> run(sessionId)));
         return new RepairRunResponse(sessionId, "started", "/api/repair/stream/" + sessionId);
     }
 
@@ -145,6 +163,13 @@ public class RepairWorkflowService {
                     "sessionId must match [A-Za-z0-9._-]{1,80}");
         }
         return trimmed;
+    }
+
+    private Path validateWorkspaceRoot(String workspaceRoot) {
+        if (workspaceRoot == null || workspaceRoot.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "workspaceRoot is required");
+        }
+        return Paths.get(workspaceRoot).toAbsolutePath().normalize();
     }
 
     /** Includes exception type when an exception has no message. */
