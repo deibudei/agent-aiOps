@@ -2,10 +2,12 @@ package org.example.agentaiops.repair.controller;
 
 import org.example.agentaiops.repair.model.RepairRunRequest;
 import org.example.agentaiops.repair.model.RepairRunResponse;
+import org.example.agentaiops.repair.model.RepairRecord;
 import org.example.agentaiops.repair.model.RepairRecordIndex;
 import org.example.agentaiops.repair.service.RepairEventHub;
 import org.example.agentaiops.repair.service.RepairWorkflowService;
 import org.example.agentaiops.repair.tool.RepairRecordTools;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/repair")
@@ -50,5 +53,14 @@ public class RepairController {
     @GetMapping("/records")
     public RepairRecordIndex records() {
         return repairRecordTools.listRecordSummaries();
+    }
+
+    /** Returns the full repair record for a single session. */
+    @GetMapping("/records/{sessionId}")
+    public RepairRecord record(@PathVariable String sessionId) {
+        return repairRecordTools.readRecord(sessionId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Repair record not found: " + sessionId));
     }
 }

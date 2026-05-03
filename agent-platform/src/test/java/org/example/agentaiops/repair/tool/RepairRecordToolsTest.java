@@ -133,6 +133,7 @@ class RepairRecordToolsTest {
                 null,
                 null,
                 "diff",
+                List.of(),
                 new TestExecutionResult(0, "ok", "", 10, false),
                 new ReviewDecision(ReviewStatus.PASS, "ok", "low", List.of("target-service/src/main/java/App.java")),
                 new GitCommitResult(false, "", "", "disabled"),

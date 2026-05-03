@@ -8,14 +8,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.io.IOException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.repair.model.CommandResult;
 import org.example.agentaiops.repair.model.GitCommitResult;
+import org.example.agentaiops.repair.model.RepairDiffFile;
+import org.example.agentaiops.repair.model.RepairDiffHunk;
+import org.example.agentaiops.repair.model.RepairDiffLine;
 import org.example.agentaiops.repair.model.RepairWorktreeResult;
 import org.springframework.stereotype.Component;
 
 @Component
 public class GitTools {
+
+    private static final Pattern DIFF_HEADER = Pattern.compile("^diff --git a/(.+) b/(.+)$");
+    private static final Pattern HUNK_HEADER = Pattern.compile(
+            "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@.*$");
 
     private final RepairProperties properties;
     private final ToolPolicy toolPolicy;
@@ -34,6 +43,11 @@ public class GitTools {
         return stripGitWarnings(result.output());
     }
 
+    /** Reads and parses the target-service diff for PR-style frontend review. */
+    public List<RepairDiffFile> readTargetDiffFiles() {
+        return parseDiffFiles(readTargetDiff());
+    }
+
     /** Lists changed target-service files from the working tree diff. */
     public List<String> changedTargetFiles() {
         CommandResult result = runGit("diff", "--name-only", "--", "target-service");
@@ -50,6 +64,124 @@ public class GitTools {
                 .filter(value -> !value.isBlank())
                 .filter(value -> !isGitWarning(value))
                 .toList();
+    }
+
+    /** Parses git unified diff output into file/hunk/line records for UI rendering. */
+    public static List<RepairDiffFile> parseDiffFiles(String diff) {
+        if (diff == null || diff.isBlank()) {
+            return List.of();
+        }
+
+        List<RepairDiffFile> files = new ArrayList<>();
+        DiffFileBuilder currentFile = null;
+        DiffHunkBuilder currentHunk = null;
+
+        for (String line : diff.split("\\R", -1)) {
+            Matcher diffMatcher = DIFF_HEADER.matcher(line);
+            if (diffMatcher.matches()) {
+                if (currentFile != null) {
+                    currentFile.addHunk(currentHunk);
+                    files.add(currentFile.build());
+                }
+                currentFile = new DiffFileBuilder(diffMatcher.group(1), diffMatcher.group(2));
+                currentHunk = null;
+                continue;
+            }
+
+            if (currentFile == null) {
+                continue;
+            }
+
+            if (line.startsWith("new file mode ")) {
+                currentFile.status = "added";
+                continue;
+            }
+            if (line.startsWith("deleted file mode ")) {
+                currentFile.status = "deleted";
+                continue;
+            }
+            if (line.startsWith("rename from ")) {
+                currentFile.status = "renamed";
+                currentFile.oldPath = line.substring("rename from ".length());
+                continue;
+            }
+            if (line.startsWith("rename to ")) {
+                currentFile.status = "renamed";
+                currentFile.newPath = line.substring("rename to ".length());
+                currentFile.filePath = currentFile.newPath;
+                continue;
+            }
+            if (line.startsWith("--- ")) {
+                currentFile.oldPath = normalizeDiffPath(line.substring(4));
+                if ("/dev/null".equals(currentFile.oldPath)) {
+                    currentFile.status = "added";
+                }
+                continue;
+            }
+            if (line.startsWith("+++ ")) {
+                currentFile.newPath = normalizeDiffPath(line.substring(4));
+                if ("/dev/null".equals(currentFile.newPath)) {
+                    currentFile.status = "deleted";
+                    currentFile.filePath = currentFile.oldPath;
+                } else {
+                    currentFile.filePath = currentFile.newPath;
+                }
+                continue;
+            }
+
+            Matcher hunkMatcher = HUNK_HEADER.matcher(line);
+            if (hunkMatcher.matches()) {
+                currentFile.addHunk(currentHunk);
+                currentHunk = new DiffHunkBuilder(
+                        line,
+                        parseInt(hunkMatcher.group(1)),
+                        parseOptionalCount(hunkMatcher.group(2)),
+                        parseInt(hunkMatcher.group(3)),
+                        parseOptionalCount(hunkMatcher.group(4)));
+                continue;
+            }
+
+            if (currentHunk == null) {
+                continue;
+            }
+
+            if (line.startsWith("+")) {
+                currentHunk.addAdded(line.substring(1));
+                currentFile.additions++;
+            } else if (line.startsWith("-")) {
+                currentHunk.addDeleted(line.substring(1));
+                currentFile.deletions++;
+            } else if (line.startsWith(" ")) {
+                currentHunk.addContext(line.substring(1));
+            } else if (line.startsWith("\\")) {
+                currentHunk.addMeta(line);
+            }
+        }
+
+        if (currentFile != null) {
+            currentFile.addHunk(currentHunk);
+            files.add(currentFile.build());
+        }
+        return files;
+    }
+
+    private static String normalizeDiffPath(String path) {
+        if (path == null || path.isBlank() || "/dev/null".equals(path)) {
+            return "/dev/null";
+        }
+        String trimmed = path.trim();
+        if (trimmed.startsWith("a/") || trimmed.startsWith("b/")) {
+            return trimmed.substring(2);
+        }
+        return trimmed;
+    }
+
+    private static int parseInt(String value) {
+        return Integer.parseInt(value);
+    }
+
+    private static int parseOptionalCount(String value) {
+        return value == null || value.isBlank() ? 1 : Integer.parseInt(value);
     }
 
     /** Removes warning lines that should not appear in demo records. */
@@ -290,5 +422,94 @@ public class GitTools {
             throw new IllegalArgumentException("Repair worktree root must be outside the main workspace: " + root);
         }
         return root;
+    }
+
+    private static final class DiffFileBuilder {
+        private String filePath;
+        private String oldPath;
+        private String newPath;
+        private String status = "modified";
+        private int additions;
+        private int deletions;
+        private final List<RepairDiffHunk> hunks = new ArrayList<>();
+
+        DiffFileBuilder(String oldPath, String newPath) {
+            this.oldPath = oldPath;
+            this.newPath = newPath;
+            this.filePath = newPath;
+        }
+
+        void addHunk(DiffHunkBuilder hunk) {
+            if (hunk != null) {
+                hunks.add(hunk.build());
+            }
+        }
+
+        RepairDiffFile build() {
+            String resolvedPath = hasDiffPath(filePath) ? filePath : hasDiffPath(newPath) ? newPath : oldPath;
+            return new RepairDiffFile(
+                    resolvedPath,
+                    oldPath,
+                    newPath,
+                    status,
+                    additions,
+                    deletions,
+                    List.copyOf(hunks));
+        }
+
+        private boolean hasDiffPath(String path) {
+            return path != null && !path.isBlank() && !"/dev/null".equals(path);
+        }
+    }
+
+    private static final class DiffHunkBuilder {
+        private final String header;
+        private final int oldStart;
+        private final int oldLines;
+        private final int newStart;
+        private final int newLines;
+        private final List<RepairDiffLine> lines = new ArrayList<>();
+        private int oldLineNumber;
+        private int newLineNumber;
+
+        DiffHunkBuilder(String header, int oldStart, int oldLines, int newStart, int newLines) {
+            this.header = header;
+            this.oldStart = oldStart;
+            this.oldLines = oldLines;
+            this.newStart = newStart;
+            this.newLines = newLines;
+            this.oldLineNumber = oldStart;
+            this.newLineNumber = newStart;
+        }
+
+        void addAdded(String content) {
+            lines.add(new RepairDiffLine("add", null, newLineNumber, content));
+            newLineNumber++;
+        }
+
+        void addDeleted(String content) {
+            lines.add(new RepairDiffLine("delete", oldLineNumber, null, content));
+            oldLineNumber++;
+        }
+
+        void addContext(String content) {
+            lines.add(new RepairDiffLine("context", oldLineNumber, newLineNumber, content));
+            oldLineNumber++;
+            newLineNumber++;
+        }
+
+        void addMeta(String content) {
+            lines.add(new RepairDiffLine("meta", null, null, content));
+        }
+
+        RepairDiffHunk build() {
+            return new RepairDiffHunk(
+                    header,
+                    oldStart,
+                    oldLines,
+                    newStart,
+                    newLines,
+                    List.copyOf(lines));
+        }
     }
 }

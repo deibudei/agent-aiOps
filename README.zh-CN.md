@@ -6,6 +6,7 @@
 
 - `agent-platform`：自动修复 Agent 平台，负责读取异常、规划修复、修改代码、运行测试、创建 PR、发送飞书通知和生成修复记录。
 - `target-service`：被监控和被修复的 Spring Boot 示例服务，内置一个参数校验类 bug，用于比赛演示。
+- `frontend`：Vue 3 + Vite + TypeScript 评委演示驾驶舱，构建产物由 `agent-platform` 托管。
 
 ## 核心流程
 
@@ -60,6 +61,11 @@
 - 演示故障：已提供 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 三类故障注入 API。
 - 一键 Demo 编排：`POST /api/demo/scenarios/start` 注入源码级故障并进入 `WAITING_FOR_TARGET_RESTART`；重启 `target-service` 后调用 `POST /api/demo/scenarios/{sessionId}/confirm-target-restarted`，平台会准备最新 traceback/测试失败证据并启动修复。
 - 修复记录索引：`GET /api/repair/records` 会聚合 `repair-records/*.json`，返回 outcome、耗时、token、patch attempt、测试结果、PR 和飞书状态，方便后续前端或实验报告消费。
+- 修复记录详情：`GET /api/repair/records/{sessionId}` 返回完整 `RepairRecord`，用于前端展示根因、计划、补丁、测试、PR、飞书和反思。
+- PR-safe 演示预检：`GET /api/demo/pr-scenarios/readiness?faultType=...` 返回 LLM/Git/GitHub/Feishu/base branch/worktree 的只读状态和 warnings，不返回任何密钥。
+- 前端演示驾驶舱：`frontend/` 已实现专业修复会话工作台，支持三类故障选择、PR-safe 启动、自动重启 target-service（失败时保留手动兜底）、ChatOps 风格 SSE 过程、Tool Trace、Artifacts、GitHub-like PR Diff 和评分维度证据区；默认主演示 `quantity-division-by-zero`。
+- 结构化 PR Diff：修复记录保留提交前 `diffSummary`，同时写入 `diffFiles[]`（文件、状态、增删行、hunk、行级内容），所以前端可在 PR Diff 页直接展示 Agent 到底改了哪些代码。
+- 结构化工具事件：SSE 对 `ReadLog`、`ReadCode`、`RunTest`、`GitCommit` 增加 `eventType`、`toolName`、`target`、`status`、`success` 和摘要，前端可直接作为 Tool Use 证据展示。
 - 修复结果：SSE completed 事件和修复记录写入 `outcome=FIXED|FAILED|ERROR` 与 `outcomeReason`。patch/test/review/PR 的受控失败是 `COMPLETED + FAILED`；系统异常是 `ERROR`，并写入最小错误记录。
 
 ### 真实 PR 演示分支模型
@@ -88,6 +94,8 @@ PR-safe scenario 的运行心智模型：
 2. POST /api/demo/pr-scenarios/start 会从 demo/fault/{faultType}
    在 REPAIR_WORKTREE_ROOT/{sessionId} 创建 repair/{sessionId} worktree。
 3. 只从这个 worktree 路径重启 target-service，让它加载故障代码。
+   Vue 驾驶舱会自动调用 `POST /api/demo/pr-scenarios/{sessionId}/restart-target-service`，
+   同时保留手动命令作为失败兜底。
 4. POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted。
 5. agent-platform 是已经启动的 JVM，继续使用 main 编译出的编排代码；
    但修复工具读写和测试的是独立 worktree 下的 target-service。
@@ -112,8 +120,37 @@ git push --force-with-lease origin demo/fault/quantity-division-by-zero
 
 1. 用一键 Demo 编排对 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 各跑 1 次验收，避免重复消耗 token。
 2. 保留 1 条真实 PR + 飞书黄金链路，其它故障可先本地记录 outcome、耗时、token 和测试结果。
-3. 前端暂缓；等 scenario API、SSE payload、`GET /api/repair/records` 稳定后，再做实时工作台。
+3. 用 Vue 驾驶舱录制正式演示视频，并验证另外两类故障的 PR-safe base branch。
 4. 后续再扩展生产触发源（日志轮询、Sentry、OpenTelemetry、CI 失败）和 RAG/知识库。
+
+### 前端演示驾驶舱
+
+前端源码在 `frontend/`，采用 Vue 3 + Vite + TypeScript，设计口径是「评委演示驾驶舱」而不是营销页。页面现在拆成 Run、Tool Trace、Artifacts、PR Diff、Judge Evidence 五个视图；Run 用 ChatOps 对话式逐字展示 SSE，Tool Trace 专门展示 `ReadLog`、`ReadCode`、`RunTest`、`GitCommit` 等调用，PR Diff 按 GitHub Files changed 风格展示文件级和行级删改。页面通过同源 `/api` 调用后端，构建产物输出到：
+
+```text
+agent-platform/src/main/resources/static/
+```
+
+安装和构建：
+
+```powershell
+npm --prefix frontend install
+npm --prefix frontend run build
+```
+
+开发调试：
+
+```powershell
+npm --prefix frontend run dev
+```
+
+开发服务会把 `/api` 代理到 `http://localhost:9901`。比赛演示时构建前端后只需要启动 `agent-platform`，浏览器打开：
+
+```text
+http://localhost:9901/
+```
+
+驾驶舱主流程走 PR-safe scenario：先调用 readiness 预检，启动 `POST /api/demo/pr-scenarios/start`；页面会尝试自动从 worktree 重启 `target-service`，成功后自动确认并连接 SSE。若自动重启失败，页面保留 worktree 路径和手动重启命令，人工重启后点击确认即可继续。修复完成后会读取完整修复记录详情。
 
 ### 修复耗时与 token 观测
 
@@ -191,7 +228,6 @@ $env:REPAIR_LLM_REFLECTION_MODEL=""
 
 暂缓内容：
 
-- 前端工作台。
 - RAG/Milvus 经验库。
 - Sentry/GitHub Webhook 自动触发。
 - 多语言、多项目泛化。
@@ -408,14 +444,21 @@ $body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero
 $scenario = Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
 ```
 
-返回 `WAITING_FOR_TARGET_RESTART` 后，要从返回的 `$scenario.worktreePath` 目录重启 `target-service`：
+Vue 驾驶舱会自动调用重启接口；命令行手动等价调用如下：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/restart-target-service"
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+```
+
+如果自动重启失败，再从返回的 `$scenario.worktreePath` 目录手动重启 `target-service`：
 
 ```powershell
 Push-Location $scenario.worktreePath
 mvn -pl target-service spring-boot:run
 ```
 
-确认故障服务已从 worktree 重启后：
+手动重启后再确认：
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
@@ -603,9 +646,10 @@ mvn -pl agent-platform spring-boot:run
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records"
+Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records/pr-quantity-001"
 ```
 
-索引会读取 repo-root `repair-records/*.json`，返回 `sessionId`、`outcome`、`durationMillis`、`patchAttempts`、`totalTokens`、`testSuccess`、`prUrl` 和 `notificationSuccess` 等摘要字段。这个 API 是后续前端工作台和单次故障验收报告的读取入口。
+索引会读取 repo-root `repair-records/*.json`，返回 `sessionId`、`outcome`、`durationMillis`、`patchAttempts`、`totalTokens`、`testSuccess`、`prUrl` 和 `notificationSuccess` 等摘要字段。详情接口返回完整 `RepairRecord`，是前端展示根因、计划、补丁、测试、PR、飞书和反思的读取入口。
 
 ## 新终端快速恢复上下文
 

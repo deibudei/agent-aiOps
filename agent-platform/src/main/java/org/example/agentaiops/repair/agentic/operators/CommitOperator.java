@@ -1,5 +1,6 @@
 package org.example.agentaiops.repair.agentic.operators;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
 import org.example.agentaiops.repair.model.GitCommitResult;
@@ -29,11 +30,50 @@ public final class CommitOperator {
         String repairTarget = state.plan == null || state.plan.repairTarget() == null
                 ? "target-service repair"
                 : state.plan.repairTarget();
-        eventHub.publish(state.sessionId, RepairStage.COMMITTING, "Creating repair branch and commit");
+        String branchName = "repair/" + state.sessionId.replaceAll("[^A-Za-z0-9._-]", "-");
+        eventHub.publish(state.sessionId, RepairStage.COMMITTING, "GitCommit started: " + branchName,
+                toolDetails(
+                        "tool_started",
+                        "GitCommit",
+                        branchName,
+                        "running",
+                        true,
+                        "Creating repair branch, committing target-service changes, and pushing",
+                        null));
         state.gitCommitResult = gitTools.commitAndPush(state.sessionId, repairTarget);
         state.step("GitTools", state.sessionId, state.gitCommitResult.message(), state.gitCommitResult.success());
         eventHub.publish(state.sessionId, RepairStage.COMMITTING, state.gitCommitResult.message(),
-                Map.of("git", state.gitCommitResult));
+                toolDetails(
+                        "tool_completed",
+                        "GitCommit",
+                        state.gitCommitResult.branchName().isBlank() ? branchName : state.gitCommitResult.branchName(),
+                        state.gitCommitResult.success() ? "completed" : "failed",
+                        state.gitCommitResult.success(),
+                        state.gitCommitResult.message(),
+                        state.gitCommitResult));
         return state.gitCommitResult.message();
+    }
+
+    private Map<String, Object> toolDetails(
+            String eventType,
+            String toolName,
+            String target,
+            String status,
+            boolean success,
+            String summary,
+            GitCommitResult result) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("eventType", eventType);
+        details.put("toolName", toolName);
+        details.put("target", target);
+        details.put("status", status);
+        details.put("success", success);
+        details.put("summary", summary);
+        if (result != null) {
+            details.put("branchName", result.branchName());
+            details.put("commitMessage", result.commitMessage());
+            details.put("git", result);
+        }
+        return details;
     }
 }

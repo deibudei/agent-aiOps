@@ -114,7 +114,9 @@ public class AgenticRepairRunner {
         AgenticReadOnlyTools readOnlyTools = new AgenticReadOnlyTools(
                 readLogTools,
                 readCodeTools,
-                properties.getAgentic().isFileReadCacheEnabled());
+                properties.getAgentic().isFileReadCacheEnabled(),
+                sessionId,
+                eventHub);
         RepairAgenticListener listener = new RepairAgenticListener(
                 state,
                 eventHub,
@@ -178,6 +180,7 @@ public class AgenticRepairRunner {
                 patchApplyOperator, testOperator, state);
 
         timed(state, "reviewRepair", reviewOperator::reviewRepair, "Repair reviewed");
+        captureReviewDiff(state);
 
         if (state.reviewDecision != null && state.reviewDecision.status() == ReviewStatus.PASS) {
             timed(state, "commitRepair", commitOperator::commitRepair, "Commit step completed");
@@ -213,6 +216,15 @@ public class AgenticRepairRunner {
                         "outcomeReason", state.outcomeReason,
                         "patchAttempts", state.patchAttempts,
                         "modelUsage", timing.modelUsage()));
+    }
+
+    private void captureReviewDiff(AgenticRepairState state) {
+        if (state.diff == null) {
+            state.diff = gitTools.readTargetDiff();
+        }
+        if (state.diffFiles == null) {
+            state.diffFiles = GitTools.parseDiffFiles(state.diff);
+        }
     }
 
     /** Generates -> validates -> applies -> tests, with reflexion retry on failure. */

@@ -14,6 +14,7 @@ import org.example.agentaiops.repair.model.PatchApplicationResult;
 import org.example.agentaiops.repair.model.PatchProposal;
 import org.example.agentaiops.repair.model.PatchResult;
 import org.example.agentaiops.repair.model.PullRequestResult;
+import org.example.agentaiops.repair.model.RepairDiffFile;
 import org.example.agentaiops.repair.model.RepairExecutionResult;
 import org.example.agentaiops.repair.model.RepairModelUsage;
 import org.example.agentaiops.repair.model.RepairOutcome;
@@ -48,6 +49,7 @@ public final class AgenticRepairState {
     public NotificationResult notificationResult;
     public RepairReflection reflection;
     public String diff;
+    public List<RepairDiffFile> diffFiles;
     public int patchAttempts;
     public boolean recordWritten;
     public RepairOutcome outcome;

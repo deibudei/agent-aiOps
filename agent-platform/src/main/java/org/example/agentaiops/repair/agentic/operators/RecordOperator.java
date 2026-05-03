@@ -60,6 +60,9 @@ public final class RecordOperator {
         if (state.diff == null) {
             state.diff = gitTools.readTargetDiff();
         }
+        if (state.diffFiles == null) {
+            state.diffFiles = GitTools.parseDiffFiles(state.diff);
+        }
         return new RepairRecord(
                 1,
                 state.sessionId,
@@ -74,6 +77,7 @@ public final class RecordOperator {
                 state.patchProposal,
                 state.patchApplicationResult,
                 AgenticEvidenceFormatter.trim(state.diff, 6000),
+                List.copyOf(state.diffFiles),
                 state.testResult,
                 state.reviewDecision,
                 state.gitCommitResult,

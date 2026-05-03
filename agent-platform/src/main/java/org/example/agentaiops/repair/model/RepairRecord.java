@@ -18,6 +18,7 @@ public record RepairRecord(
         PatchProposal patchProposal,
         PatchApplicationResult patchApplicationResult,
         String diffSummary,
+        List<RepairDiffFile> diffFiles,
         TestExecutionResult testResult,
         ReviewDecision reviewDecision,
         GitCommitResult gitCommitResult,

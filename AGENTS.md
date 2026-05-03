@@ -30,19 +30,21 @@ Required demo loop:
 - Current implementation is a standalone Java multi-module project.
 - `target-service` represents a failing validation bug before repair, but current mainline is already in the repaired state.
 - `agent-platform` is the Agent backend.
-- Frontend is intentionally deferred until backend flow is stable.
+- Frontend is now a Vue 3 + Vite + TypeScript judge demo console under `frontend/`; production assets are built into `agent-platform/src/main/resources/static` and served at `http://localhost:9901/`. Current UI is a professional repair-session workbench with Run, Tool Trace, Artifacts, PR Diff, and Judge Evidence views.
 - LLM repair, GitHub PR, and Feishu are implemented but disabled by default in upload-safe config.
 - Demo fault injection is available under `POST /api/demo/faults/{faultType}/inject`; it writes only fixed demo files under `target-service/src/main`.
 - One-click demo scenario orchestration is available under `POST /api/demo/scenarios/start` and `POST /api/demo/scenarios/{sessionId}/confirm-target-restarted`; it injects a fault, waits for manual `target-service` restart, prepares fresh traceback/test evidence, and starts the repair workflow.
 - Source-injection demo scenarios require `REPAIR_GIT_ENABLED=false`; they intentionally dirty the working tree. For real GitHub PR demos, use the committed `demo/fault/...` base branch and the PR-safe scenario API.
-- PR-safe one-click demo scenarios are available under `POST /api/demo/pr-scenarios/start` and `POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted`; they require `REPAIR_GIT_ENABLED=true`, `REPAIR_GITHUB_ENABLED=true`, and `REPAIR_BASE_BRANCH=demo/fault/{faultType}`. They prepare `repair/{sessionId}` in an isolated git worktree under `REPAIR_WORKTREE_ROOT`, so the main checkout stays on `main`.
+- PR-safe one-click demo scenarios are available under `POST /api/demo/pr-scenarios/start`, `POST /api/demo/pr-scenarios/{sessionId}/restart-target-service`, and `POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted`; they require `REPAIR_GIT_ENABLED=true`, `REPAIR_GITHUB_ENABLED=true`, and `REPAIR_BASE_BRANCH=demo/fault/{faultType}`. They prepare `repair/{sessionId}` in an isolated git worktree under `REPAIR_WORKTREE_ROOT`, so the main checkout stays on `main`. The restart endpoint starts target-service from the worktree for local demos and the frontend falls back to manual restart if it fails.
 - PR-safe demo fault branch mapping: `quantity-division-by-zero -> demo/fault/quantity-division-by-zero`, `wrong-quote-route -> demo/fault/wrong-quote-route`, `wrong-error-status -> demo/fault/wrong-error-status`.
 - `TARGET_SERVICE_BASE_URL` configures the running target-service URL used by scenario orchestration; default is `http://localhost:9910`.
 - Runtime 500 traceback logs are written as separate files under `target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log`, with traceback filenames and file `timestamp=` values formatted in Asia/Shanghai time.
 - `agent-platform` should read traceback evidence from the `target-service/logs` directory, not only from one monolithic log file.
 - For `wrong-quote-route` and `wrong-error-status` scenarios, `agent-platform` runs target-service tests once and writes a latest test-failure evidence log under `target-service/logs/tracebacks/` to avoid stale runtime tracebacks misleading diagnosis.
 - Repair records should be written under repo-root `repair-records/`.
-- Repair record summaries are exposed through `GET /api/repair/records`, which aggregates `repair-records/*.json` into outcome/timing/token/test/PR/notification summaries for later frontend and experiment views.
+- Repair records now preserve pre-commit code review evidence as both `diffSummary` and structured `diffFiles[]` (`filePath`, status, additions/deletions, hunks, lines) so the frontend can render a GitHub-like Files changed view even after commit/push cleans the worktree.
+- Repair record summaries are exposed through `GET /api/repair/records`, which aggregates `repair-records/*.json` into outcome/timing/token/test/PR/notification summaries for frontend and experiment views. Full records are exposed through `GET /api/repair/records/{sessionId}`.
+- PR-safe demo readiness is exposed through `GET /api/demo/pr-scenarios/readiness?faultType=...`; it returns LLM/Git/GitHub/Feishu/base-branch/worktree booleans and warnings without exposing secrets.
 - If records appear under `agent-platform/repair-records/`, the running backend is stale or the workspace root was misdetected; restart `agent-platform` from repo root.
 - Keep `README.zh-CN.md`, `README.md`, and this `AGENTS.md` updated whenever project architecture, commands, environment variables, demo flow, or Agent capability status changes.
 - User preference: whenever answering about plans, planning, or roadmap decisions, search the web first and ground the answer in current sources when practical.
@@ -59,7 +61,7 @@ Required demo loop:
 - Role-specific model routing is configured locally with `repair.llm.diagnosis-model`, `repair.llm.plan-model`, `repair.llm.patch-model`, and `repair.llm.reflection-model` in `application-local.yml` or equivalent environment variables. The supervisor model override has been removed. If only one role gets a stronger model, use `patch-model` first since it both generates and rewrites patches.
 - Repair outcomes are explicit: completed SSE events and repair records include `RepairOutcome` (`FIXED`, `FAILED`, `ERROR`) and `outcomeReason`. Patch/test/review/PR failures are controlled `COMPLETED + FAILED`; workflow exceptions are `ERROR` with a minimal error record.
 - For real PR demos, do not inject a temporary fault on `main` and expect a useful PR diff. `main` stays repaired. Use `demo/fault/quantity-division-by-zero` as a committed faulty base branch (current `main` plus only the division-by-zero fault), and set `REPAIR_BASE_BRANCH=demo/fault/quantity-division-by-zero`.
-- PR-safe demo mental model: start `agent-platform` from `main`; `POST /api/demo/pr-scenarios/start` creates `repair/{sessionId}` in `REPAIR_WORKTREE_ROOT/{sessionId}` from `demo/fault/{faultType}`; restart only `target-service` from that worktree; `agent-platform` keeps running with the main-compiled JVM code while repair tools read/write `target-service` in the active worktree context; wait for SSE `completed` and repair records before deleting worktrees/branches or editing docs/platform files.
+- PR-safe demo mental model: start `agent-platform` from `main`; `POST /api/demo/pr-scenarios/start` creates `repair/{sessionId}` in `REPAIR_WORKTREE_ROOT/{sessionId}` from `demo/fault/{faultType}`; restart only `target-service` from that worktree (the Vue console attempts `restart-target-service` automatically); `agent-platform` keeps running with the main-compiled JVM code while repair tools read/write `target-service` in the active worktree context; wait for SSE `completed` and repair records before deleting worktrees/branches or editing docs/platform files.
 - Do ongoing project work on `main` or normal feature branches targeting `main`. Do not modify docs or platform code on `demo/fault/...` or `repair/{sessionId}` branches. After `main` changes, refresh the demo fault branch from latest `main` and keep only the intentional fault commit on top (`git checkout -B demo/fault/quantity-division-by-zero main`, inject the fault, commit it, then `git push --force-with-lease origin demo/fault/quantity-division-by-zero`). Treat `repair/{sessionId}` branches as disposable demo outputs.
 - Real GitHub PR token requirement: if `GITHUB_TOKEN` is a fine-grained personal access token, Repository access must include `deibudei/agent-aiOps`, with `Contents: Read and write` and `Pull requests: Read and write`. Read-only code/PR permission causes GitHub HTTP 403 during PR creation even when local `git push` succeeds through separate Git credentials.
 
@@ -91,8 +93,10 @@ Current implementation status:
 4. Reflexion (apply -> test -> rollback -> regenerate) bounded by `repair.workflow.max-patch-attempts`.
 5. Real GitHub PR via REST API and real Feishu v2 card with timing/token block are implemented, gated by enable flags, and validated in `pr-quantity-002`.
 6. Demo fault injection and one-click demo scenario orchestration are available for local replay.
-7. Repair record indexing is available through `GET /api/repair/records`.
-8. Next work: validate each supported fault type once through the scenario API, keep one real PR + Feishu golden path, then build the frontend workbench after backend events and record summaries stabilize.
+7. Repair record indexing and detail APIs are available through `GET /api/repair/records` and `GET /api/repair/records/{sessionId}`.
+8. Vue judge demo console is implemented in `frontend/`, uses the PR-safe scenario API and SSE stream, auto-attempts target-service restart, persists live events across refresh, and is served by `agent-platform` after `npm --prefix frontend run build`; V2 presents a single repair-session workbench with ChatOps, Tool Trace, Artifacts, PR Diff, and Judge Evidence views.
+9. Structured SSE tool events now include `eventType`, `toolName`, `target`, `status`, and `success` for `ReadLog`, `ReadCode`, `RunTest`, and `GitCommit`, so the frontend can show the required Tool Use evidence explicitly.
+10. Next work: validate each supported fault type once through the PR-safe scenario API, keep one real PR + Feishu golden path, and record the official demo from the Vue console.
 
 ## LangChain4j Integration Notes
 
@@ -179,8 +183,24 @@ $env:REPAIR_GITHUB_ENABLED="true"
 $env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
 $body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
-# Restart target-service after WAITING_FOR_TARGET_RESTART.
+# Optional manual equivalent; the Vue console calls this restart endpoint automatically.
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/restart-target-service"
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+```
+
+Frontend demo console:
+
+```powershell
+npm --prefix frontend install
+npm --prefix frontend run build
+mvn -pl agent-platform spring-boot:run
+# Open http://localhost:9901/
+```
+
+Frontend development server:
+
+```powershell
+npm --prefix frontend run dev
 ```
 
 For `wrong-quote-route` and `wrong-error-status`, create committed base branches `demo/fault/wrong-quote-route` and `demo/fault/wrong-error-status` first, then restart `agent-platform` with the matching `REPAIR_BASE_BRANCH`.
@@ -222,6 +242,12 @@ Agent backend:
 
 ```powershell
 mvn -pl agent-platform test
+```
+
+Frontend:
+
+```powershell
+npm --prefix frontend run build
 ```
 
 Target service current mainline:

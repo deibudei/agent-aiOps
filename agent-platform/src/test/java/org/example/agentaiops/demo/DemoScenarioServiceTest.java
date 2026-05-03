@@ -167,6 +167,48 @@ class DemoScenarioServiceTest {
     }
 
     @Test
+    void reportsPullRequestReadinessWhenCompetitionConfigIsPresent() {
+        properties.getLlm().setEnabled(true);
+        properties.getGit().setEnabled(true);
+        properties.getGithub().setEnabled(true);
+        properties.getGithub().setToken("secret-github-token");
+        properties.getFeishu().setEnabled(true);
+        properties.getFeishu().setWebhookUrl("https://example.invalid/feishu-webhook");
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+        properties.getGit().setWorktreeRoot("../agent-aiOps-worktrees");
+
+        DemoPrScenarioReadiness readiness = service.pullRequestReadiness("quantity-division-by-zero");
+
+        assertThat(readiness.ready()).isTrue();
+        assertThat(readiness.expectedBaseBranch()).isEqualTo("demo/fault/quantity-division-by-zero");
+        assertThat(readiness.baseBranchMatches()).isTrue();
+        assertThat(readiness.warnings()).isEmpty();
+    }
+
+    @Test
+    void reportsPullRequestReadinessWarningsWithoutLeakingSecrets() {
+        properties.getLlm().setEnabled(false);
+        properties.getGit().setEnabled(true);
+        properties.getGithub().setEnabled(true);
+        properties.getGithub().setToken("secret-github-token");
+        properties.getFeishu().setEnabled(true);
+        properties.getFeishu().setWebhookUrl("https://example.invalid/feishu-webhook");
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+
+        DemoPrScenarioReadiness readiness = service.pullRequestReadiness("wrong-quote-route");
+
+        assertThat(readiness.ready()).isFalse();
+        assertThat(readiness.baseBranchMatches()).isFalse();
+        assertThat(readiness.warnings()).anySatisfy(warning -> assertThat(warning)
+                .contains("REPAIR_LLM_ENABLED=true"));
+        assertThat(readiness.warnings()).anySatisfy(warning -> assertThat(warning)
+                .contains("REPAIR_BASE_BRANCH=demo/fault/wrong-quote-route"));
+        assertThat(String.join("\n", readiness.warnings()))
+                .doesNotContain("secret-github-token")
+                .doesNotContain("feishu-webhook");
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void confirmPullRequestScenarioStartsRepairAfterEvidence() throws Exception {
         properties.getGit().setEnabled(true);
@@ -335,6 +377,7 @@ class DemoScenarioServiceTest {
                 null,
                 null,
                 "",
+                List.of(),
                 null,
                 null,
                 null,

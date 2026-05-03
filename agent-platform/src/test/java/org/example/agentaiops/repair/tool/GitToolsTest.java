@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.repair.model.CommandResult;
+import org.example.agentaiops.repair.model.RepairDiffFile;
 import org.example.agentaiops.repair.model.RepairWorktreeResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,6 +31,37 @@ class GitToolsTest {
 
         assertThat(GitTools.parseChangedFiles(output))
                 .containsExactly("target-service/src/main/java/com/example/targetservice/service/OrderService.java");
+    }
+
+    @Test
+    void parsesUnifiedDiffForFrontendReview() {
+        String diff = """
+                diff --git a/target-service/src/main/java/com/example/targetservice/service/OrderService.java b/target-service/src/main/java/com/example/targetservice/service/OrderService.java
+                index 409cf9a..2a0dbbb 100644
+                --- a/target-service/src/main/java/com/example/targetservice/service/OrderService.java
+                +++ b/target-service/src/main/java/com/example/targetservice/service/OrderService.java
+                @@ -10,6 +10,9 @@ public class OrderService {
+                     public int calculateUnitPrice(int totalCents, int quantity) {
+                -        return totalCents / quantity;
+                +        if (quantity <= 0) {
+                +            throw new IllegalArgumentException("quantity must be positive");
+                +        }
+                +        return totalCents / quantity;
+                     }
+                 }
+                """;
+
+        RepairDiffFile file = GitTools.parseDiffFiles(diff).get(0);
+
+        assertThat(file.filePath())
+                .isEqualTo("target-service/src/main/java/com/example/targetservice/service/OrderService.java");
+        assertThat(file.status()).isEqualTo("modified");
+        assertThat(file.additions()).isEqualTo(4);
+        assertThat(file.deletions()).isEqualTo(1);
+        assertThat(file.hunks()).hasSize(1);
+        assertThat(file.hunks().get(0).lines())
+                .extracting("type")
+                .contains("context", "delete", "add");
     }
 
     @Test

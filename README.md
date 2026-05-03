@@ -8,6 +8,7 @@ Java implementation of a service auto-repair Agent demo.
 
 - `agent-platform`: Spring Boot repair Agent platform.
 - `target-service`: Spring Boot service under repair.
+- `frontend`: Vue 3 + Vite + TypeScript judge demo console. Its production build is served by `agent-platform`.
 
 ## Demo Flow
 
@@ -52,8 +53,11 @@ The full competition loop has been verified end to end on the committed `demo/fa
 - Done: reflexion loop on test failure (rollback + regeneratePatchFromTestFailure with bounded attempts).
 - Done: real GitHub PR creation through REST API (`GitHubRestPullRequestProvider`), with auto-detected owner/repo from the git origin remote.
 - Done: Feishu v2 interactive card with title/summary/timing/token block, "View PR" button, and optional signing-secret support. Unknown token usage is shown as unknown instead of zero.
+- Done: Vue judge demo console under `frontend/`, with PR-safe scenario start, readiness checks, automatic target-service restart with manual fallback, ChatOps-style SSE stream, Tool Trace, Artifacts, GitHub-like PR Diff, repair-record detail, and scoring-evidence panels.
+- Done: structured SSE tool events for `ReadLog`, `ReadCode`, `RunTest`, and `GitCommit`, including tool name, target, status, success flag, and summary for frontend evidence display.
+- Done: read-only `GET /api/repair/records/{sessionId}` detail API and `GET /api/demo/pr-scenarios/readiness?faultType=...` PR-safe readiness API for the console. These endpoints do not expose secrets.
 - Disabled by default: LLM repair, Git commit/push, GitHub PR creation, and Feishu notification (toggle with `REPAIR_LLM_ENABLED`, `REPAIR_GIT_ENABLED`, `REPAIR_GITHUB_ENABLED`, `FEISHU_ENABLED`).
-- Next: run one validation per fault type through the scenario API, keep one real PR + Feishu golden path, and defer the frontend until the scenario API, SSE payloads, and repair-record index are stable.
+- Next: use the Vue console for the official demo video, validate each supported fault type through PR-safe scenarios, and keep one real PR + Feishu golden path.
 
 The current mainline target service is repaired. Use the demo fault injection endpoints for local replay, or use the committed demo base branch described below for real PR demos.
 
@@ -77,6 +81,8 @@ Runtime worktree model for PR-safe scenarios:
 2. POST /api/demo/pr-scenarios/start creates repair/{sessionId}
    in REPAIR_WORKTREE_ROOT/{sessionId} from demo/fault/{faultType}.
 3. Restart only target-service from that worktree path so it loads the faulty code.
+   The Vue console calls `POST /api/demo/pr-scenarios/{sessionId}/restart-target-service`
+   automatically and keeps the manual command as a fallback.
 4. POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted.
 5. The already-running agent-platform JVM continues using the main-compiled
    orchestration code while repair tools read/write the isolated worktree.
@@ -95,6 +101,37 @@ git pull
 git checkout -B demo/fault/quantity-division-by-zero main
 # inject only the quantity-division-by-zero fault, then commit it
 git push --force-with-lease origin demo/fault/quantity-division-by-zero
+```
+
+## Frontend Demo Console
+
+The judge-facing console lives in `frontend/` and is built with Vue 3, Vite, and TypeScript. It is a repair-session workbench for the PR-safe demo loop: readiness check, fault selection, scenario start, automatic target-service restart with manual fallback, ChatOps-style live SSE output, dedicated Tool Trace for `ReadLog` / `ReadCode` / `RunTest` / `GitCommit`, Artifacts for root cause / plan / tests / reflection, a GitHub-like PR Diff view, PR/Feishu outcome, and scoring-evidence panels.
+
+Repair records preserve code review evidence as `diffSummary` plus structured `diffFiles[]` so the UI can show file headers, additions/deletions, hunks, and red/green line-level changes even after the repair branch has been committed and pushed.
+
+Install and build:
+
+```powershell
+npm --prefix frontend install
+npm --prefix frontend run build
+```
+
+The build writes production assets to:
+
+```text
+agent-platform/src/main/resources/static/
+```
+
+For local frontend development:
+
+```powershell
+npm --prefix frontend run dev
+```
+
+The Vite dev server proxies `/api` to `http://localhost:9901`. For the competition demo, build the frontend, start `agent-platform`, and open:
+
+```text
+http://localhost:9901/
 ```
 
 ## Repair Timing And Token Observability
@@ -310,11 +347,12 @@ $env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
 $body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
 $scenario = Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
 
-# Restart target-service from $scenario.worktreePath after WAITING_FOR_TARGET_RESTART.
+# Optional manual equivalent; the Vue console calls this restart endpoint automatically.
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/restart-target-service"
 Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
 ```
 
-The target-service terminal should run from the returned worktree path:
+If automatic restart fails, run target-service manually from the returned worktree path:
 
 ```powershell
 Push-Location $scenario.worktreePath
@@ -335,6 +373,8 @@ Repair record summaries are exposed for future frontend and experiment views:
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records"
+Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records/pr-quantity-001"
+Invoke-RestMethod -Uri "http://localhost:9901/api/demo/pr-scenarios/readiness?faultType=quantity-division-by-zero"
 ```
 
 Keep real API keys in environment variables only. `.env`, `.env.*`, `*.secret`, `local-secrets/`, and `local-reports/` are ignored.

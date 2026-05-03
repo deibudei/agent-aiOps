@@ -293,6 +293,59 @@ public class DemoScenarioService {
         return waiting;
     }
 
+    /** Returns read-only readiness information for a PR-safe demo scenario. */
+    public DemoPrScenarioReadiness pullRequestReadiness(String faultType) {
+        DemoFaultType type = parseFaultType(faultType);
+        String expectedBaseBranch = "demo/fault/" + type.wireName();
+        String configuredBaseBranch = properties.getGit().getBaseBranch();
+        boolean baseBranchMatches = expectedBaseBranch.equals(configuredBaseBranch);
+        boolean llmEnabled = properties.getLlm().isEnabled();
+        boolean gitEnabled = properties.getGit().isEnabled();
+        boolean githubEnabled = properties.getGithub().isEnabled();
+        boolean feishuEnabled = properties.getFeishu().isEnabled();
+        String worktreeRoot = properties.getGit().getWorktreeRoot();
+
+        List<String> warnings = new ArrayList<>();
+        if (!llmEnabled) {
+            warnings.add("Set REPAIR_LLM_ENABLED=true before running the real demo.");
+        }
+        if (!gitEnabled) {
+            warnings.add("Set REPAIR_GIT_ENABLED=true so the Agent can create a repair branch.");
+        }
+        if (!githubEnabled) {
+            warnings.add("Set REPAIR_GITHUB_ENABLED=true so the Agent can create a GitHub PR.");
+        }
+        if (githubEnabled && !hasText(properties.getGithub().getToken())) {
+            warnings.add("GITHUB_TOKEN is empty; GitHub REST PR creation will fail.");
+        }
+        if (!feishuEnabled) {
+            warnings.add("Set FEISHU_ENABLED=true for the competition Feishu notification step.");
+        }
+        if (feishuEnabled && !hasText(properties.getFeishu().getWebhookUrl())) {
+            warnings.add("FEISHU_WEBHOOK_URL is empty; Feishu notification will fail.");
+        }
+        if (!baseBranchMatches) {
+            warnings.add("Set REPAIR_BASE_BRANCH=" + expectedBaseBranch
+                    + " for the selected fault. Current value is " + configuredBaseBranch + ".");
+        }
+        if (!hasText(worktreeRoot)) {
+            warnings.add("Set REPAIR_WORKTREE_ROOT to a directory outside the main checkout.");
+        }
+
+        return new DemoPrScenarioReadiness(
+                type.wireName(),
+                expectedBaseBranch,
+                configuredBaseBranch,
+                baseBranchMatches,
+                llmEnabled,
+                gitEnabled,
+                githubEnabled,
+                feishuEnabled,
+                worktreeRoot,
+                warnings.isEmpty(),
+                List.copyOf(warnings));
+    }
+
     /** Confirms target-service restart and starts the repair workflow for a PR-safe scenario. */
     public DemoScenarioResult confirmPullRequestTargetRestarted(String sessionId) {
         String safeSessionId = validateSessionId(sessionId);
@@ -616,6 +669,10 @@ public class DemoScenarioService {
             return "";
         }
         return value.length() <= maxChars ? value : value.substring(0, maxChars) + "\n... trimmed ...";
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private record ScenarioEvidence(boolean success, String message, String summary, List<String> nextSteps) {

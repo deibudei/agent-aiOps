@@ -1,5 +1,6 @@
 package org.example.agentaiops.repair.agentic.operators;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.example.agentaiops.config.RepairProperties;
 import org.example.agentaiops.repair.agentic.AgenticRepairState;
@@ -28,13 +29,47 @@ public final class TestOperator {
     }
 
     public TestExecutionResult runTargetTests() {
+        String command = properties.getTargetProject().getTestCommand();
+        eventHub.publish(state.sessionId, RepairStage.TESTING, "RunTest started: " + command,
+                toolDetails("tool_started", "RunTest", command, "running", true, "Running target-service tests", null));
         state.testResult = runTestTools.runTargetServiceTests();
-        state.step("RunTestTools", properties.getTargetProject().getTestCommand(),
+        state.step("RunTestTools", command,
                 "exitCode=" + state.testResult.exitCode()
                         + ", durationMs=" + state.testResult.durationMillis(),
                 state.testResult.success());
         eventHub.publish(state.sessionId, RepairStage.TESTING, "Target-service tests completed",
-                Map.of("testResult", state.testResult));
+                toolDetails(
+                        "tool_completed",
+                        "RunTest",
+                        command,
+                        state.testResult.success() ? "completed" : "failed",
+                        state.testResult.success(),
+                        "exitCode=" + state.testResult.exitCode()
+                                + ", durationMs=" + state.testResult.durationMillis(),
+                        state.testResult));
         return state.testResult;
+    }
+
+    private Map<String, Object> toolDetails(
+            String eventType,
+            String toolName,
+            String target,
+            String status,
+            boolean success,
+            String summary,
+            TestExecutionResult testResult) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("eventType", eventType);
+        details.put("toolName", toolName);
+        details.put("target", target);
+        details.put("status", status);
+        details.put("success", success);
+        details.put("summary", summary);
+        if (testResult != null) {
+            details.put("exitCode", testResult.exitCode());
+            details.put("durationMillis", testResult.durationMillis());
+            details.put("testResult", testResult);
+        }
+        return details;
     }
 }
