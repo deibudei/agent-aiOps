@@ -24,18 +24,20 @@ public interface AgenticPatchAgent {
             - Keep each replacement method-level or smaller when possible.
             - Include tests only when source context shows the expected regression surface.
             - Do not invent files or modify agent-platform, root configs, secrets, scripts, or build files.
+            - Human-facing fields repairTarget, rootCause, and operations[].reason must be concise Simplified Chinese.
+            - Keep oldText and newText as exact source code text; do not translate code, comments, strings, paths, or commands.
             - Return only the structured PatchProposal object; no markdown, comments, or prose.
 
             PatchProposal shape:
             {
-              "repairTarget": "same target as the plan",
-              "rootCause": "specific root cause",
+              "repairTarget": "Chinese target from the plan",
+              "rootCause": "Chinese root cause",
               "operations": [
                 {
                   "filePath": "target-service/src/main/java/...",
                   "oldText": "exact text currently present in the file",
                   "newText": "replacement text",
-                  "reason": "why this change is needed"
+                  "reason": "Chinese reason for this change"
                 }
               ],
               "testsToRun": ["mvn -pl target-service test"],
@@ -51,14 +53,14 @@ public interface AgenticPatchAgent {
             }
             PatchProposal:
             {
-              "repairTarget": "OrderService.calculateUnitPrice quantity validation",
-              "rootCause": "quantity is divided before positive-boundary validation",
+              "repairTarget": "补齐 OrderService.calculateUnitPrice 的 quantity 参数校验",
+              "rootCause": "quantity 为 0 时先执行除法，触发 ArithmeticException。",
               "operations": [
                 {
                   "filePath": "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
                   "oldText": "    /** Calculates unit price without guarding invalid quantities. */\\n    public int calculateUnitPrice(int totalCents, int quantity) {\\n        return totalCents / quantity;\\n    }",
                   "newText": "    /** Calculates unit price, rejecting non-positive quantities. */\\n    public int calculateUnitPrice(int totalCents, int quantity) {\\n        if (quantity <= 0) {\\n            throw new IllegalArgumentException(\\"quantity must be positive\\");\\n        }\\n        return totalCents / quantity;\\n    }",
-                  "reason": "Rejects zero or negative quantity before integer division."
+                  "reason": "在整数除法前拒绝 0 或负数 quantity，避免 / by zero。"
                 }
               ],
               "testsToRun": ["mvn -pl target-service test"],
@@ -71,14 +73,14 @@ public interface AgenticPatchAgent {
             Source context contains @GetMapping("/api/orders/quotation") above quote(...).
             PatchProposal:
             {
-              "repairTarget": "OrderController quote route mapping",
-              "rootCause": "quote route mapping drifted from /api/orders/quote",
+              "repairTarget": "恢复 OrderController.quote 的公开路由",
+              "rootCause": "quote 路由偏离 /api/orders/quote 契约。",
               "operations": [
                 {
                   "filePath": "target-service/src/main/java/com/example/targetservice/controller/OrderController.java",
                   "oldText": "    @GetMapping(\\"/api/orders/quotation\\")",
                   "newText": "    @GetMapping(\\"/api/orders/quote\\")",
-                  "reason": "Restores the public endpoint expected by tests and callers."
+                  "reason": "恢复测试和调用方期望的公开接口。"
                 }
               ],
               "testsToRun": ["mvn -pl target-service test"],
@@ -93,7 +95,7 @@ public interface AgenticPatchAgent {
             Source context:
             {{sourceContext}}
 
-            Generate the minimal safe PatchProposal.
+            Generate the minimal safe PatchProposal. Human-facing fields must be concise Simplified Chinese.
             """)
     PatchProposal generatePatchProposal(
             @V("plan") RepairPlan plan,

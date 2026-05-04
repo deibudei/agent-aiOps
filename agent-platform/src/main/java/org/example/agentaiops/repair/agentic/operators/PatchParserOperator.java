@@ -6,6 +6,8 @@ import org.example.agentaiops.repair.model.PatchProposal;
 import org.example.agentaiops.repair.model.RepairStage;
 import org.example.agentaiops.repair.service.RepairEventHub;
 
+import java.util.Map;
+
 /** Validates the typed LLM PatchProposal before safe application. */
 public final class PatchParserOperator {
 
@@ -28,7 +30,8 @@ public final class PatchParserOperator {
                 proposal.rawModelOutput() == null ? "" : proposal.rawModelOutput());
         state.step("PatchParser", "patchProposal", "operations=" + state.patchProposal.operations().size(), true);
         eventHub.publish(state.sessionId, RepairStage.EXECUTING,
-                "Patch proposal validated with operations=" + state.patchProposal.operations().size());
+                "Patch proposal validated with operations=" + state.patchProposal.operations().size(),
+                Map.of("patchProposal", state.patchProposal));
         return state.patchProposal;
     }
 

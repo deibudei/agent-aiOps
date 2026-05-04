@@ -27,6 +27,8 @@ public interface AgenticPatchRegenerationAgent {
             - Copy oldText exactly from the source context, including whitespace and line breaks.
             - Do not repeat the previous failing edit verbatim; adapt to the failing test signal.
             - Keep changes within target-service/src/main or target-service/src/test.
+            - Human-facing fields repairTarget, rootCause, and operations[].reason must be concise Simplified Chinese.
+            - Keep oldText and newText as exact source code text; do not translate code, comments, strings, paths, or commands.
             - Only emit the structured PatchProposal object; no markdown, comments, or prose.
 
             PatchProposal shape is the same as the first attempt.
@@ -45,6 +47,7 @@ public interface AgenticPatchRegenerationAgent {
             {{testStderr}}
 
             Generate a new minimal PatchProposal that addresses the failure above.
+            Human-facing fields must be concise Simplified Chinese.
             """)
     PatchProposal regeneratePatchFromTestFailure(
             @V("plan") RepairPlan plan,

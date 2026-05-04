@@ -11,6 +11,6 @@ public record PatchOperation(
         String oldText,
         @Description("Replacement text to write in place of oldText.")
         String newText,
-        @Description("Short explanation of why this replacement fixes the root cause.")
+        @Description("Short Simplified Chinese explanation of why this replacement fixes the root cause.")
         String reason) {
 }

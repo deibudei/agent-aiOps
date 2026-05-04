@@ -37,6 +37,7 @@ public final class NotifyOperator {
         String reviewReason = state.reviewDecision == null || state.reviewDecision.reason() == null
                 ? ""
                 : state.reviewDecision.reason();
+        var notificationTiming = state.timing();
         state.notificationResult = feishuTools.sendRepairCard(
                 state.sessionId,
                 state.outcome,
@@ -45,11 +46,15 @@ public final class NotifyOperator {
                 rootCause,
                 reviewReason,
                 state.pullRequestResult,
-                state.timing());
+                notificationTiming);
         state.step("FeishuTools", state.sessionId, state.notificationResult.message(),
                 state.notificationResult.success());
         eventHub.publish(state.sessionId, RepairStage.NOTIFIED, state.notificationResult.message(),
-                Map.of("notification", state.notificationResult));
+                Map.of(
+                        "notification", state.notificationResult,
+                        "durationMillis", notificationTiming.durationMillis(),
+                        "modelUsage", notificationTiming.modelUsage(),
+                        "timing", notificationTiming));
         return state.notificationResult.message();
     }
 }

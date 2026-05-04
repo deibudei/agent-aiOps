@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import {
   Activity,
   Bell,
@@ -22,11 +22,13 @@ import {
   LayoutDashboard,
   ListChecks,
   MessagesSquare,
+  Moon,
   Play,
   Radio,
   RefreshCw,
   RotateCw,
   ShieldCheck,
+  Sun,
   TerminalSquare,
   Wrench,
 } from 'lucide-vue-next';
@@ -86,6 +88,7 @@ interface ToolEventView {
   status: string;
   success: boolean | null;
   summary: string;
+  durationMillis: number | null;
 }
 
 interface ChatItem {
@@ -96,9 +99,12 @@ interface ChatItem {
   body: string;
   meta: string;
   status: string;
+  order?: number;
+  durationMillis?: number | null;
   event?: RepairEvent;
   tool?: ToolEventView;
   plan?: DisplayPlan;
+  patch?: DisplayPatch;
 }
 
 interface WorkbenchStage {
@@ -139,10 +145,23 @@ interface DisplayPlan {
   testCommand: string;
 }
 
+interface DisplayPatch {
+  summary: string;
+  operations: DisplayPatchOperation[];
+}
+
+interface DisplayPatchOperation {
+  filePath: string;
+  reason: string;
+  lineSummary: string;
+}
+
 interface PersistedState {
   activeView?: ActiveView;
   selectedFault?: FaultType;
   sessionId?: string;
+  darkMode?: boolean;
+  runToolTraceCollapsed?: boolean;
   scenario?: DemoScenarioResult | null;
   targetRestart?: DemoTargetRestartResult | null;
   currentRecord?: RepairRecord | null;
@@ -183,7 +202,7 @@ const faultMetas: FaultMeta[] = [
 ];
 
 const stageDefs: StageDef[] = [
-  { stage: 'detecting', label: '读取 Traceback', description: 'ReadLog 收集日志证据', icon: Radio },
+  { stage: 'detecting', label: 'Traceback', description: 'ReadLog 收集日志证据', icon: Radio },
   { stage: 'planning', label: 'AI 根因与计划', description: 'Diagnosis / Plan Agent', icon: BrainCircuit },
   { stage: 'executing', label: 'Agent 编排', description: 'Java DAG + AI 子 Agent', icon: Activity },
   { stage: 'patching', label: '自动补丁', description: 'Patch Agent 生成或重写', icon: Code2 },
@@ -248,17 +267,23 @@ const selectedDiffFilePath = ref('');
 const diffViewMode = ref<DiffViewMode>('split');
 const sseCopyStatus = ref('');
 const nowMillis = ref(Date.now());
+const darkMode = ref(false);
+const runToolTraceCollapsed = ref(false);
+const chatFeedRef = ref<HTMLDivElement | null>(null);
+const planTransitionReady = ref(false);
+const visiblePlanSegments = ref(0);
+const activePlanRevealKey = ref('');
 
 let restoringPersistedState = true;
 let skipNextFaultReset = false;
 let clockTimer: number | undefined;
+let planRevealTimer: number | undefined;
 
 const activeFault = computed(() => faultMetas.find((fault) => fault.type === selectedFault.value) ?? faultMetas[0]);
 const currentEvents = computed(() =>
   stream.events.value
     .filter((event) => !event.sessionId || event.sessionId === sessionId.value)
     .slice()
-    .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()),
 );
 const latestEvent = computed(() => {
   const allEvents = currentEvents.value;
@@ -270,8 +295,14 @@ const visibleRecord = computed(() =>
     : currentRecord.value ?? selectedRecord.value,
 );
 const completedEvent = computed(() => [...currentEvents.value].reverse().find((event) => event.stage === 'completed'));
+const notifiedTimingEvent = computed(() =>
+  [...currentEvents.value]
+    .reverse()
+    .find((event) => event.stage === 'notified' && numberDetail(event, 'durationMillis') !== null),
+);
+const topMetricEvent = computed(() => notifiedTimingEvent.value ?? completedEvent.value);
 const currentDuration = computed(() => {
-  const eventDuration = numberDetail(completedEvent.value, 'durationMillis');
+  const eventDuration = numberDetail(topMetricEvent.value, 'durationMillis');
   if (eventDuration !== null) {
     return eventDuration;
   }
@@ -348,6 +379,7 @@ const chatItems = computed<ChatItem[]>(() => {
       body: `${activeFault.value.label} / ${sessionId.value}`,
       meta: 'operator',
       status: scenario.value?.stage ?? 'READY',
+      order: 0,
     });
   }
 
@@ -356,23 +388,23 @@ const chatItems = computed<ChatItem[]>(() => {
     const key = `${tool.toolName}|${tool.target}`;
     const existing = mergedTools.get(key);
     if (!existing || toolStatusRank(tool.status) >= toolStatusRank(existing.status)) {
-      mergedTools.set(key, tool);
+      mergedTools.set(key, existing ? { ...tool, order: existing.order } : tool);
     }
   }
   for (const tool of mergedTools.values()) {
     items.push(chatItemFromTool(tool));
   }
 
-  const planningEntry = [...currentEvents.value.entries()]
+  const patchEntry = [...currentEvents.value.entries()]
     .reverse()
-    .find(([, event]) => event.stage === 'planning');
-  if (planningEntry) {
-    const [index, event] = planningEntry;
-    items.push(chatItemFromPlan(event, index, displayPlan.value));
+    .find(([, event]) => isPatchTimelineEvent(event));
+  if (patchEntry && displayPatch.value.operations.length > 0) {
+    const [index, event] = patchEntry;
+    items.push(chatItemFromPatch(event, index, displayPatch.value));
   }
 
   for (const [index, event] of currentEvents.value.entries()) {
-    if (event.stage === 'planning' || isToolEvent(event) || isNoisyAgentEvent(event)) {
+    if (event.stage === 'planning' || isPatchTimelineEvent(event) || isToolEvent(event) || isNoisyAgentEvent(event)) {
       continue;
     }
     const item = chatItemFromEvent(event, index);
@@ -380,7 +412,7 @@ const chatItems = computed<ChatItem[]>(() => {
       items.push(item);
     }
   }
-  return items.sort((left, right) => itemTime(left) - itemTime(right));
+  return items.sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
 });
 
 const latestChatItem = computed(() => {
@@ -389,6 +421,9 @@ const latestChatItem = computed(() => {
 });
 const selectedToolEvent = computed(() => allToolEvents.value.find((tool) => tool.id === selectedChatItemId.value) ?? null);
 const selectedChatItem = computed(() => {
+  if (pinnedPlanItem.value?.id === selectedChatItemId.value) {
+    return pinnedPlanItem.value;
+  }
   const items = chatItems.value;
   const selectedItem = items.find((item) => item.id === selectedChatItemId.value);
   if (selectedItem) {
@@ -405,13 +440,14 @@ const selectedDiffFile = computed(() =>
   reviewDiffFiles.value.find((file) => file.filePath === selectedDiffFilePath.value) ?? reviewDiffFiles.value[0] ?? null,
 );
 const tokenUsage = computed<TokenTotals>(() =>
-  collectTokenUsage(unknownArrayDetail(completedEvent.value, 'modelUsage'), currentRecord.value?.timing?.modelUsage),
+  collectTokenUsage(unknownArrayDetail(topMetricEvent.value, 'modelUsage'), currentRecord.value?.timing?.modelUsage),
 );
 const prStatusLabel = computed(() => (currentPrUrl.value ? '已创建' : '未创建'));
 const feishuStatusLabel = computed(() => {
   const event = [...currentEvents.value].reverse().find((item) => item.stage === 'notified');
   if (event) {
-    if (stringDetail(event, 'status') === 'failed' || booleanDetail(event, 'success') === false) {
+    const notificationSuccess = nestedBooleanDetail(event, 'notification', 'success') ?? booleanDetail(event, 'success');
+    if (stringDetail(event, 'status') === 'failed' || notificationSuccess === false) {
       return '失败';
     }
     if (event.message.includes('Sending')) {
@@ -464,6 +500,68 @@ const sseRawRows = computed<SseRawLine[]>(() => {
 });
 const sseRawText = computed(() => sseRawRows.value.map((row) => row.text).join('\n'));
 const displayPlan = computed<DisplayPlan>(() => buildDisplayPlan(visibleRecord.value, currentEvents.value));
+const displayPatch = computed<DisplayPatch>(() => buildDisplayPatch(visibleRecord.value, currentEvents.value));
+const latestPlanEvent = computed(() => [...currentEvents.value].reverse().find((event) => event.stage === 'planning') ?? null);
+const pinnedPlanItem = computed<ChatItem | null>(() => {
+  const planEvent = latestPlanEvent.value;
+  if (!planEvent && !visibleRecord.value?.plan) {
+    return null;
+  }
+  return chatItemFromPlan(planEvent, planEvent ? currentEvents.value.indexOf(planEvent) : -1, displayPlan.value);
+});
+const planRevealTotalSegments = computed(() => {
+  const plan = pinnedPlanItem.value?.plan;
+  if (!plan) {
+    return 0;
+  }
+  return 1 + plan.steps.length + (plan.files.length > 0 ? 1 : 0);
+});
+const planRevealKey = computed(() => {
+  const item = pinnedPlanItem.value;
+  if (!item?.plan) {
+    return '';
+  }
+  if (item.event) {
+    return `${item.event.sessionId || sessionId.value}|${item.event.timestamp}|planning`;
+  }
+  return `${visibleRecord.value?.sessionId || sessionId.value}|record-plan`;
+});
+const visiblePlanStepCount = computed(() => {
+  if (!pinnedPlanItem.value?.plan) {
+    return 0;
+  }
+  return Math.max(0, Math.min(pinnedPlanItem.value.plan.steps.length, visiblePlanSegments.value - 1));
+});
+const shouldShowPlanRoot = computed(() => visiblePlanSegments.value >= 1);
+const shouldShowPlanFiles = computed(() => {
+  const plan = pinnedPlanItem.value?.plan;
+  return Boolean(plan?.files.length) && visiblePlanSegments.value >= planRevealTotalSegments.value;
+});
+const nextTimelineHint = computed(() => {
+  if (latestEvent.value?.stage === 'completed' || latestEvent.value?.stage === 'error') {
+    return '';
+  }
+  if (waitingForRestart.value) {
+    return '下一步将重启 target-service，并确认故障复现环境。';
+  }
+  const stage = latestEvent.value?.stage;
+  if (!stage) {
+    return '下一步将启动修复流程并读取 Traceback。';
+  }
+  const hints: Partial<Record<RepairStage, string>> = {
+    detecting: '下一步将进行根因分析，并生成修复计划。',
+    planning: '下一步将根据计划生成自动补丁。',
+    executing: '下一步将读取目标代码并准备补丁变更。',
+    patching: '下一步将应用补丁并运行回归测试。',
+    testing: '下一步将审查 diff 和测试结果。',
+    reviewing: '下一步将提交修复分支。',
+    committing: '下一步将创建 GitHub Pull Request。',
+    pr_created: '下一步将发送飞书通知给开发者 Review。',
+    notified: '下一步将生成修复记录和反思沉淀。',
+    reflecting: '下一步将完成闭环并刷新修复记录。',
+  };
+  return hints[stage] ?? '下一步将继续推进自动修复流程。';
+});
 
 const scoreEvidence = computed(() => {
   const record = visibleRecord.value;
@@ -511,6 +609,8 @@ watch(
     activeView: activeView.value,
     selectedFault: selectedFault.value,
     sessionId: sessionId.value,
+    darkMode: darkMode.value,
+    runToolTraceCollapsed: runToolTraceCollapsed.value,
     scenario: scenario.value,
     targetRestart: targetRestart.value,
     currentRecord: currentRecord.value,
@@ -521,8 +621,43 @@ watch(
   { deep: true },
 );
 
+watch(
+  () => [chatItems.value.length, latestChatItem.value?.id, pinnedPlanItem.value?.id, latestEvent.value?.timestamp],
+  () => {
+    if (restoringPersistedState || activeView.value !== 'run' || !isChatFeedNearBottom()) {
+      return;
+    }
+    nextTick(() => scrollChatFeedToBottom());
+  },
+);
+
+watch(
+  () => planRevealKey.value,
+  (planKey) => {
+    schedulePlanReveal(planKey, planRevealTotalSegments.value);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => planRevealTotalSegments.value,
+  (totalSegments) => {
+    if (
+      !planRevealKey.value
+      || activePlanRevealKey.value !== planRevealKey.value
+      || planRevealTimer !== undefined
+      || visiblePlanSegments.value >= totalSegments
+    ) {
+      return;
+    }
+    visiblePlanSegments.value = totalSegments;
+  },
+);
+
 onMounted(async () => {
   restoreState();
+  await nextTick();
+  planTransitionReady.value = true;
   restoringPersistedState = false;
   clockTimer = window.setInterval(() => {
     nowMillis.value = Date.now();
@@ -535,6 +670,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stream.close();
+  clearPlanRevealTimer();
   if (clockTimer !== undefined) {
     window.clearInterval(clockTimer);
     clockTimer = undefined;
@@ -756,6 +892,12 @@ function isNoisyAgentEvent(event: RepairEvent) {
   return stringDetail(event, 'toolName') === 'AgentTool';
 }
 
+function isPatchTimelineEvent(event: RepairEvent) {
+  return Boolean(asRecord(event.details?.patchProposal))
+    || event.message.includes('Patch proposal validated')
+    || event.message.includes('Patch proposal applied');
+}
+
 function isEvidenceReadLogEvent(event: RepairEvent) {
   if (event.stage !== 'detecting') {
     return false;
@@ -765,8 +907,62 @@ function isEvidenceReadLogEvent(event: RepairEvent) {
     || Boolean(asRecord(event.details?.evidence));
 }
 
+function eventToolName(event: RepairEvent) {
+  return stringDetail(event, 'toolName') || (isEvidenceReadLogEvent(event) ? 'ReadLog' : stageToolName(event.stage));
+}
+
+function eventToolTarget(event: RepairEvent, toolName = eventToolName(event)) {
+  return stringDetail(event, 'target')
+    || stringDetail(event, 'branchName')
+    || (toolName === 'ReadLog' ? 'target-service/logs' : event.stage);
+}
+
+function explicitDurationMillis(event?: RepairEvent | null) {
+  return numberDetail(event, 'durationMillis') ?? numberDetail(event, 'durationMs') ?? numberDetail(event, 'elapsedMillis');
+}
+
+function inferToolDurationMillis(event: RepairEvent, index: number, toolName: string, target: string, status: string) {
+  if (status === 'running') {
+    return Math.max(0, nowMillis.value - new Date(event.timestamp).getTime());
+  }
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previous = currentEvents.value[cursor];
+    if (!previous || !isToolEvent(previous)) {
+      continue;
+    }
+    const previousToolName = eventToolName(previous);
+    const previousTarget = eventToolTarget(previous, previousToolName);
+    if (previousToolName !== toolName || previousTarget !== target) {
+      continue;
+    }
+    const previousStatus = stringDetail(previous, 'status');
+    const previousEventType = stringDetail(previous, 'eventType');
+    if (previousStatus === 'running' || previousEventType.includes('started')) {
+      return Math.max(0, new Date(event.timestamp).getTime() - new Date(previous.timestamp).getTime());
+    }
+  }
+  return null;
+}
+
+function chatEventDurationMillis(event: RepairEvent, index: number) {
+  const explicit = explicitDurationMillis(event);
+  if (explicit !== null) {
+    return explicit;
+  }
+  const current = new Date(event.timestamp).getTime();
+  const previous = currentEvents.value[index - 1];
+  if (previous) {
+    return Math.max(0, current - new Date(previous.timestamp).getTime());
+  }
+  const next = currentEvents.value[index + 1];
+  if (next) {
+    return Math.max(0, new Date(next.timestamp).getTime() - current);
+  }
+  return null;
+}
+
 function toToolEvent(event: RepairEvent, index: number): ToolEventView {
-  const toolName = stringDetail(event, 'toolName') || (isEvidenceReadLogEvent(event) ? 'ReadLog' : stageToolName(event.stage));
+  const toolName = eventToolName(event);
   const inferredSuccess = event.stage === 'pr_created'
     ? nestedBooleanDetail(event, 'pullRequest', 'success')
     : event.stage === 'notified'
@@ -776,8 +972,9 @@ function toToolEvent(event: RepairEvent, index: number): ToolEventView {
     || (event.message.includes('Creating') || event.message.includes('Sending') || event.message.includes('collecting') ? 'running' : '')
     || (booleanDetail(event, 'success') === false || inferredSuccess === false ? 'failed' : 'completed');
   const success = booleanDetail(event, 'success') ?? inferredSuccess;
-  const target = stringDetail(event, 'target') || stringDetail(event, 'branchName') || (toolName === 'ReadLog' ? 'target-service/logs' : event.stage);
+  const target = eventToolTarget(event, toolName);
   const summary = stringDetail(event, 'summary') || event.message;
+  const durationMillis = explicitDurationMillis(event) ?? inferToolDurationMillis(event, index, toolName, target, status);
   return {
     id: `${event.timestamp}-${index}`,
     event,
@@ -788,34 +985,55 @@ function toToolEvent(event: RepairEvent, index: number): ToolEventView {
     status,
     success,
     summary,
+    durationMillis,
   };
 }
 
 function chatItemFromTool(tool: ToolEventView): ChatItem {
   return {
-    id: tool.id,
+    id: `tool-row-${tool.toolName}-${tool.target}`,
     role: 'tool',
     badgeLabel: 'Tool',
     title: toolTitle(tool.toolName),
     body: toolSentence(tool),
     meta: `${tool.action} / ${formatDate(tool.event.timestamp)}`,
     status: tool.status,
+    order: tool.order,
+    durationMillis: tool.durationMillis,
     event: tool.event,
     tool,
   };
 }
 
-function chatItemFromPlan(event: RepairEvent, index: number, plan: DisplayPlan): ChatItem {
+function chatItemFromPlan(event: RepairEvent | null, index: number, plan: DisplayPlan): ChatItem {
   return {
-    id: `${event.timestamp}-${index}-plan`,
+    id: event ? `${event.timestamp}-${index}-plan` : 'record-plan',
+    role: 'agent',
+    badgeLabel: event ? stageLabel(event.stage) : 'AI 根因与计划',
+    title: 'AI 根因与计划',
+    body: '根因分析和修复计划已生成',
+    meta: event ? `${event.stage} / ${formatDate(event.timestamp)}` : 'record / completed',
+    status: event ? stringDetail(event, 'status') || event.stage : 'completed',
+    order: index,
+    durationMillis: event ? chatEventDurationMillis(event, index) : null,
+    event: event ?? undefined,
+    plan,
+  };
+}
+
+function chatItemFromPatch(event: RepairEvent, index: number, patch: DisplayPatch): ChatItem {
+  return {
+    id: `${event.timestamp}-${index}-patch`,
     role: 'agent',
     badgeLabel: stageLabel(event.stage),
-    title: 'AI 根因与计划',
-    body: event.message,
+    title: 'Patch 代码变更',
+    body: patch.summary || event.message,
     meta: `${event.stage} / ${formatDate(event.timestamp)}`,
     status: stringDetail(event, 'status') || event.stage,
+    order: index,
+    durationMillis: chatEventDurationMillis(event, index),
     event,
-    plan,
+    patch,
   };
 }
 
@@ -839,6 +1057,8 @@ function chatItemFromEvent(event: RepairEvent, index: number): ChatItem | null {
     body: event.message,
     meta,
     status: stringDetail(event, 'status') || event.stage,
+    order: index,
+    durationMillis: chatEventDurationMillis(event, index),
     event,
   };
 }
@@ -996,6 +1216,8 @@ function restoreState() {
     if (parsed.sessionId) {
       sessionId.value = parsed.sessionId;
     }
+    darkMode.value = parsed.darkMode ?? false;
+    runToolTraceCollapsed.value = parsed.runToolTraceCollapsed ?? false;
     scenario.value = parsed.scenario ?? null;
     targetRestart.value = parsed.targetRestart ?? null;
     currentRecord.value = parsed.currentRecord ?? null;
@@ -1148,15 +1370,66 @@ function buildDisplayPlan(record: RepairRecord | null, events: RepairEvent[]): D
   return { rootCause, repairTarget, files, steps, testCommand };
 }
 
+function buildDisplayPatch(record: RepairRecord | null, events: RepairEvent[]): DisplayPatch {
+  const livePatch = [...events]
+    .reverse()
+    .map((event) => asRecord(event.details?.patchProposal))
+    .find((proposal): proposal is Record<string, unknown> => Boolean(proposal));
+  const recordPatch = asRecord(record?.patchProposal);
+  const proposal = livePatch ?? recordPatch;
+  if (!proposal) {
+    return { summary: '', operations: [] };
+  }
+  const rawOperations = proposal.operations;
+  const operations = Array.isArray(rawOperations)
+    ? rawOperations
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .map((operation, index) => {
+          const oldText = stringField(operation, 'oldText');
+          const newText = stringField(operation, 'newText');
+          return {
+            filePath: stringField(operation, 'filePath') || stringField(operation, 'path') || `patch-operation-${index + 1}`,
+            reason: stringField(operation, 'reason') || '更新目标代码以修复当前故障。',
+            lineSummary: patchLineSummary(oldText, newText),
+          };
+        })
+        .filter((operation) => operation.reason || operation.lineSummary)
+    : [];
+  const summary = stringField(proposal, 'summary')
+    || stringField(proposal, 'repairTarget')
+    || record?.patchApplicationResult?.message
+    || 'Patch Agent 已生成代码变更。';
+  return { summary, operations };
+}
+
+function patchLineSummary(oldText: string, newText: string) {
+  const oldLines = countTextLines(oldText);
+  const newLines = countTextLines(newText);
+  if (oldLines > 0 && newLines > 0) {
+    return `替换 ${oldLines} 行为 ${newLines} 行`;
+  }
+  if (newLines > 0) {
+    return `新增 ${newLines} 行`;
+  }
+  if (oldLines > 0) {
+    return `删除 ${oldLines} 行`;
+  }
+  return '';
+}
+
+function countTextLines(text: string) {
+  if (!text) {
+    return 0;
+  }
+  return text.split(/\r\n|\r|\n/).length;
+}
+
 function recordDuration(record: RepairRecord) {
   if (!record.startedAt || !record.completedAt) {
     return null;
   }
   return new Date(record.completedAt).getTime() - new Date(record.startedAt).getTime();
-}
-
-function itemTime(item: ChatItem) {
-  return item.event ? new Date(item.event.timestamp).getTime() : 0;
 }
 
 function toolStatusRank(status: string) {
@@ -1313,12 +1586,52 @@ function diffLinePrefix(type: string) {
   return ' ';
 }
 
-function detailDuration(event?: RepairEvent | null) {
-  if (!event) {
-    return '-';
+function highlightCode(content: string) {
+  const escaped = escapeHtml(content);
+  const tokens = escaped.match(/(&quot;(?:\\.|[^&])*?&quot;|'(?:\\.|[^'])*?'|\/\/.*|\/\*.*?\*\/|@\w+|[A-Za-z_$][A-Za-z0-9_$]*|\b\d+(?:\.\d+)?\b|\s+|.)/g) ?? [];
+  return tokens.map((token) => {
+    if (/^\s+$/.test(token)) {
+      return token;
+    }
+    if (/^(\/\/|\/\*)/.test(token)) {
+      return `<span class="code-token comment">${token}</span>`;
+    }
+    if (/^(&quot;|')/.test(token)) {
+      return `<span class="code-token string">${token}</span>`;
+    }
+    if (/^@\w+/.test(token)) {
+      return `<span class="code-token annotation">${token}</span>`;
+    }
+    if (/^(public|private|protected|class|interface|enum|record|extends|implements|static|final|void|int|long|double|float|boolean|char|byte|short|new|return|if|else|for|while|switch|case|break|continue|throw|throws|try|catch|finally|import|package|null|true|false|this|super)$/.test(token)) {
+      return `<span class="code-token keyword">${token}</span>`;
+    }
+    if (/^\d+(?:\.\d+)?$/.test(token)) {
+      return `<span class="code-token number">${token}</span>`;
+    }
+    if (/^[A-Z][A-Za-z0-9_$]*$/.test(token)) {
+      return `<span class="code-token type">${token}</span>`;
+    }
+    return token;
+  }).join('');
+}
+
+function escapeHtml(content: string) {
+  return content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function toolDuration(tool: ToolEventView) {
+  return formatDuration(tool.durationMillis ?? explicitDurationMillis(tool.event));
+}
+
+function chatItemDuration(item: ChatItem) {
+  if (item.tool) {
+    return toolDuration(item.tool);
   }
-  const value = event.details?.durationMillis;
-  return typeof value === 'number' ? formatDuration(value) : '-';
+  return formatDuration(item.durationMillis ?? explicitDurationMillis(item.event));
 }
 
 function detailJson(event?: RepairEvent | null) {
@@ -1364,13 +1677,90 @@ function outcomeClass(value?: string | null) {
   return 'neutral';
 }
 
+function toggleTheme() {
+  darkMode.value = !darkMode.value;
+}
+
+function toggleRunToolTrace() {
+  runToolTraceCollapsed.value = !runToolTraceCollapsed.value;
+}
+
+function schedulePlanReveal(planKey: string, totalSegments: number) {
+  if (
+    planKey
+    && activePlanRevealKey.value === planKey
+    && (planRevealTimer !== undefined || visiblePlanSegments.value >= totalSegments)
+  ) {
+    return;
+  }
+  clearPlanRevealTimer();
+  activePlanRevealKey.value = planKey;
+  if (!planKey || totalSegments <= 0) {
+    visiblePlanSegments.value = 0;
+    return;
+  }
+  if (restoringPersistedState || !planTransitionReady.value || prefersReducedMotion()) {
+    visiblePlanSegments.value = totalSegments;
+    return;
+  }
+  visiblePlanSegments.value = 1;
+  if (totalSegments <= 1) {
+    return;
+  }
+  planRevealTimer = window.setInterval(() => {
+    if (activePlanRevealKey.value !== planKey) {
+      clearPlanRevealTimer();
+      return;
+    }
+    const currentTotalSegments = planRevealTotalSegments.value || totalSegments;
+    visiblePlanSegments.value += 1;
+    if (visiblePlanSegments.value >= currentTotalSegments) {
+      visiblePlanSegments.value = currentTotalSegments;
+      clearPlanRevealTimer();
+    }
+  }, 280);
+}
+
+function clearPlanRevealTimer() {
+  if (planRevealTimer !== undefined) {
+    window.clearInterval(planRevealTimer);
+    planRevealTimer = undefined;
+  }
+}
+
+function isChatFeedNearBottom() {
+  const feed = chatFeedRef.value;
+  if (!feed) {
+    return true;
+  }
+  return feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 48;
+}
+
+function scrollChatFeedToBottom() {
+  const feed = chatFeedRef.value;
+  if (!feed) {
+    return;
+  }
+  feed.scrollTo({
+    top: feed.scrollHeight,
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  });
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="{ 'theme-dark': darkMode }">
     <header class="topbar" aria-label="Agent AI Ops summary">
       <div class="topbar-title">
         <h1>Agent 自动修复工作台</h1>
+        <button class="theme-toggle" type="button" :aria-label="darkMode ? '切换浅色模式' : '切换深色模式'" @click="toggleTheme">
+          <component :is="darkMode ? Sun : Moon" :size="16" />
+        </button>
       </div>
       <div class="topbar-metrics" aria-live="polite">
         <span class="metric-cell wide">
@@ -1388,8 +1778,8 @@ function outcomeClass(value?: string | null) {
         <span class="metric-cell token-cell">
           <strong>Tokens</strong>
           <code>{{ tokenUsage.total !== null ? formatNumber(tokenUsage.total) : 'n/a' }}</code>
-          <span class="token-up">↑ {{ tokenUsage.input !== null ? formatNumber(tokenUsage.input) : 'n/a' }}</span>
-          <span class="token-down">↓ {{ tokenUsage.output !== null ? formatNumber(tokenUsage.output) : 'n/a' }}</span>
+          <span class="token-input">input {{ tokenUsage.input !== null ? formatNumber(tokenUsage.input) : 'n/a' }}</span>
+          <span class="token-output">output {{ tokenUsage.output !== null ? formatNumber(tokenUsage.output) : 'n/a' }}</span>
         </span>
         <span class="metric-cell">
           <strong>PR 状态</strong>
@@ -1584,66 +1974,147 @@ function outcomeClass(value?: string | null) {
             </span>
           </div>
 
-          <div class="chat-feed" role="log" aria-live="polite" aria-label="Agent repair messages">
-            <article
-              v-for="item in chatItems"
-              :key="item.id"
-              class="timeline-row"
-              :class="[item.role, outcomeClass(item.status), { selected: selectedChatItem?.id === item.id }]"
+          <Transition name="pinned-plan" :css="planTransitionReady">
+            <section
+              v-if="pinnedPlanItem?.plan"
+              class="timeline-pinned-plan"
+              :class="{ selected: selectedChatItem?.id === pinnedPlanItem.id }"
               role="button"
               tabindex="0"
-              :aria-label="`查看 ${item.title} 详情`"
-              @click="selectChatItem(item)"
-              @keydown.enter.prevent="selectChatItem(item)"
-              @keydown.space.prevent="selectChatItem(item)"
+              aria-label="查看 AI 根因与计划详情"
+              @click="pinnedPlanItem && selectChatItem(pinnedPlanItem)"
+              @keydown.enter.prevent="pinnedPlanItem && selectChatItem(pinnedPlanItem)"
+              @keydown.space.prevent="pinnedPlanItem && selectChatItem(pinnedPlanItem)"
             >
-              <time class="mono" :datetime="item.event?.timestamp">{{ item.event ? formatTime(item.event.timestamp) : '-' }}</time>
-              <span class="role-chip" :class="item.role">{{ item.badgeLabel }}</span>
-              <div class="timeline-message">
-                <strong>{{ item.tool?.toolName ?? item.title }}</strong>
-                <span>{{ displayChatBody(item) }}</span>
-                <section v-if="item.plan" class="timeline-plan-card" aria-label="AI root cause and repair plan">
-                  <dl class="timeline-plan-facts">
-                    <div>
-                      <dt>根因</dt>
-                      <dd>{{ item.plan.rootCause }}</dd>
-                    </div>
-                    <div>
-                      <dt>修复目标</dt>
-                      <dd>{{ item.plan.repairTarget }}</dd>
-                    </div>
-                    <div>
-                      <dt>测试命令</dt>
-                      <dd class="mono">{{ item.plan.testCommand }}</dd>
-                    </div>
-                  </dl>
-                  <div v-if="item.plan.steps.length" class="timeline-plan-section">
-                    <span>修复步骤</span>
-                    <ol>
-                      <li v-for="step in item.plan.steps" :key="step">{{ step }}</li>
-                    </ol>
-                  </div>
-                  <div v-if="item.plan.files.length" class="timeline-plan-files">
-                    <span>涉及文件</span>
-                    <code v-for="file in item.plan.files" :key="file">{{ shortTarget(file) }}</code>
-                  </div>
-                </section>
+              <div class="pinned-plan-head">
+                <span class="role-chip agent">AI 根因与计划</span>
+                <strong>置顶计划</strong>
               </div>
-              <span class="duration mono">{{ item.event ? detailDuration(item.event) : '-' }}</span>
-              <CheckCircle2 class="row-check" :size="16" />
-            </article>
+              <TransitionGroup tag="div" name="plan-reveal" class="pinned-plan-body">
+                <article v-if="shouldShowPlanRoot" key="root" class="plan-insight root">
+                  <div class="plan-insight-label">
+                    <CircleAlert :size="14" />
+                    <strong>根因</strong>
+                  </div>
+                  <p>{{ pinnedPlanItem.plan.rootCause }}</p>
+                </article>
+                <article v-if="visiblePlanStepCount > 0" key="steps" class="plan-insight steps">
+                  <div class="plan-insight-label">
+                    <ListChecks :size="14" />
+                    <strong>步骤</strong>
+                  </div>
+                  <TransitionGroup tag="ol" name="plan-reveal" class="pinned-plan-steps">
+                    <li
+                      v-for="(step, stepIndex) in pinnedPlanItem.plan.steps.slice(0, visiblePlanStepCount)"
+                      :key="`${stepIndex}-${step}`"
+                    >
+                      {{ step }}
+                    </li>
+                  </TransitionGroup>
+                </article>
+                <article v-if="shouldShowPlanFiles" key="files" class="plan-insight files">
+                  <div class="plan-insight-label">
+                    <FileSearch :size="14" />
+                    <strong>文件</strong>
+                  </div>
+                  <div class="plan-file-pills">
+                    <code v-for="file in pinnedPlanItem.plan.files" :key="file">{{ shortTarget(file) }}</code>
+                  </div>
+                </article>
+              </TransitionGroup>
+            </section>
+          </Transition>
+
+          <div ref="chatFeedRef" class="chat-feed" role="log" aria-live="polite" aria-label="Agent repair messages">
+            <TransitionGroup tag="div" name="timeline-list" class="timeline-list">
+              <article
+                v-for="item in chatItems"
+                :key="item.id"
+                class="timeline-row"
+                :class="[item.role, outcomeClass(item.status), { selected: selectedChatItem?.id === item.id }]"
+                role="button"
+                tabindex="0"
+                :aria-label="`查看 ${item.title} 详情`"
+                @click="selectChatItem(item)"
+                @keydown.enter.prevent="selectChatItem(item)"
+                @keydown.space.prevent="selectChatItem(item)"
+              >
+                <time class="mono" :datetime="item.event?.timestamp">{{ item.event ? formatTime(item.event.timestamp) : '-' }}</time>
+                <span class="role-chip" :class="item.role">{{ item.badgeLabel }}</span>
+                <div class="timeline-message">
+                  <strong>{{ item.tool?.toolName ?? item.title }}</strong>
+                  <span>{{ displayChatBody(item) }}</span>
+                  <section v-if="item.plan" class="timeline-plan-card" aria-label="AI root cause and repair plan">
+                    <dl class="timeline-plan-facts">
+                      <div>
+                        <dt>根因</dt>
+                        <dd>{{ item.plan.rootCause }}</dd>
+                      </div>
+                      <div>
+                        <dt>修复目标</dt>
+                        <dd>{{ item.plan.repairTarget }}</dd>
+                      </div>
+                      <div>
+                        <dt>测试命令</dt>
+                        <dd class="mono">{{ item.plan.testCommand }}</dd>
+                      </div>
+                    </dl>
+                    <div v-if="item.plan.steps.length" class="timeline-plan-section">
+                      <span>修复步骤</span>
+                      <ol>
+                        <li v-for="step in item.plan.steps" :key="step">{{ step }}</li>
+                      </ol>
+                    </div>
+                    <div v-if="item.plan.files.length" class="timeline-plan-files">
+                      <span>涉及文件</span>
+                      <code v-for="file in item.plan.files" :key="file">{{ shortTarget(file) }}</code>
+                    </div>
+                  </section>
+                  <section v-if="item.patch" class="timeline-patch-card" aria-label="Patch summary">
+                    <div class="timeline-patch-head">
+                      <span>自动补丁</span>
+                      <strong>{{ item.patch.summary }}</strong>
+                    </div>
+                    <ul class="timeline-patch-list">
+                      <li v-for="operation in item.patch.operations" :key="operation.filePath">
+                        <code>{{ shortTarget(operation.filePath) }}</code>
+                        <span>{{ operation.reason }}</span>
+                        <em v-if="operation.lineSummary">{{ operation.lineSummary }}</em>
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+                <span class="duration mono">{{ chatItemDuration(item) }}</span>
+                <CheckCircle2 class="row-check" :size="16" />
+              </article>
+            </TransitionGroup>
+            <Transition name="next-step">
+              <div v-if="nextTimelineHint" class="timeline-next-step" aria-live="polite">
+                <ChevronRight :size="15" />
+                <span>{{ nextTimelineHint }}</span>
+              </div>
+            </Transition>
           </div>
 
           <p v-if="stream.streamError.value" class="inline-warning" role="alert">
             {{ stream.streamError.value }}
           </p>
 
-          <section class="run-tool-table" aria-label="Tool trace in current run">
+          <section class="run-tool-table" :class="{ collapsed: runToolTraceCollapsed }" aria-label="Tool trace in current run">
             <div class="run-table-heading">
-              <strong>Tool Trace（本次运行）</strong>
-              <button class="text-button" type="button" @click="activeView = 'tools'">查看全部</button>
+              <span class="run-table-title">
+                <strong>Tool Trace（本次运行）</strong>
+                <em>{{ primaryToolEvents.length }} 条</em>
+              </span>
+              <span class="run-table-actions">
+                <button class="text-button compact" type="button" @click="toggleRunToolTrace">
+                  <component :is="runToolTraceCollapsed ? ChevronRight : ChevronDown" :size="15" />
+                  {{ runToolTraceCollapsed ? '展开' : '隐藏' }}
+                </button>
+                <button class="text-button compact" type="button" @click="activeView = 'tools'">查看全部</button>
+              </span>
             </div>
-            <div class="mini-tool-table" role="table">
+            <div v-if="!runToolTraceCollapsed" class="mini-tool-table" role="table">
               <div class="mini-tool-row mini-tool-head" role="row">
                 <span role="columnheader">时间</span>
                 <span role="columnheader">工具</span>
@@ -1666,18 +2137,13 @@ function outcomeClass(value?: string | null) {
                 <span role="cell">{{ tool.toolName }}</span>
                 <span role="cell" class="mini-status" :class="outcomeClass(tool.status)">{{ tool.status }}</span>
                 <span class="mono" role="cell">{{ shortTarget(tool.target || tool.summary) }}</span>
-                <span class="mono" role="cell">{{ detailDuration(tool.event) }}</span>
+                <span class="mono" role="cell">{{ toolDuration(tool) }}</span>
               </div>
               <div v-if="primaryToolEvents.length === 0" class="mini-tool-row empty" role="row">
                 <span role="cell">等待 ReadLog / ReadCode / RunTest / GitCommit / GitHub PR / Feishu 工具事件。</span>
               </div>
             </div>
           </section>
-
-          <div class="timeline-input">
-            <input class="text-input" disabled value="输入消息（支持 /help 查看指令）" />
-            <button class="primary-button compact" type="button" disabled>发送</button>
-          </div>
         </section>
 
         <aside class="detail-panel" aria-label="Evidence and artifacts">
@@ -1708,7 +2174,7 @@ function outcomeClass(value?: string | null) {
                     <div><dt>目标</dt><dd class="mono">{{ activeTool.target }}</dd></div>
                     <div><dt>动作</dt><dd>{{ toolSentence(activeTool) }}</dd></div>
                     <div><dt>状态</dt><dd><i class="status-dot"></i>{{ activeTool.status }}</dd></div>
-                    <div><dt>耗时</dt><dd class="mono">{{ detailDuration(activeTool.event) }}</dd></div>
+                    <div><dt>耗时</dt><dd class="mono">{{ toolDuration(activeTool) }}</dd></div>
                   </dl>
                 </template>
                 <p v-else>等待 Agent 调用 ReadLog / ReadCode / RunTest / GitCommit。</p>
@@ -1781,7 +2247,7 @@ function outcomeClass(value?: string | null) {
                           :class="diffLineClass(line.type)"
                         >
                           <span class="mono">{{ line.oldLineNumber ?? '' }}</span>
-                          <code>{{ line.content }}</code>
+                          <code v-html="highlightCode(line.content)"></code>
                         </div>
                       </div>
                       <div class="split-column">
@@ -1792,7 +2258,7 @@ function outcomeClass(value?: string | null) {
                           :class="diffLineClass(line.type)"
                         >
                           <span class="mono">{{ line.newLineNumber ?? '' }}</span>
-                          <code>{{ line.content }}</code>
+                          <code v-html="highlightCode(line.content)"></code>
                         </div>
                       </div>
                     </div>
@@ -1808,7 +2274,7 @@ function outcomeClass(value?: string | null) {
                       :class="diffLineClass(line.type)"
                     >
                       <span class="mono">{{ diffLinePrefix(line.type) }}</span>
-                      <code>{{ line.content }}</code>
+                      <code v-html="highlightCode(line.content)"></code>
                     </div>
                   </section>
                 </template>
@@ -1877,7 +2343,7 @@ function outcomeClass(value?: string | null) {
                     </div>
                     <div>
                       <dt>duration</dt>
-                      <dd class="mono">{{ detailDuration(tool.event) }}</dd>
+                      <dd class="mono">{{ toolDuration(tool) }}</dd>
                     </div>
                     <div>
                       <dt>summary</dt>
@@ -2076,7 +2542,7 @@ function outcomeClass(value?: string | null) {
                     <span class="line-number mono">{{ line.oldLineNumber ?? '' }}</span>
                     <span class="line-number mono">{{ line.newLineNumber ?? '' }}</span>
                     <span class="line-prefix mono">{{ diffLinePrefix(line.type) }}</span>
-                    <code>{{ line.content }}</code>
+                    <code v-html="highlightCode(line.content)"></code>
                   </div>
                 </section>
               </div>

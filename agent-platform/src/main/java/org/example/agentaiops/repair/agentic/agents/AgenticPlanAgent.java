@@ -21,14 +21,19 @@ public interface AgenticPlanAgent {
             - Include only files that are justified by traceback, tests, or source evidence.
             - Do not include broad refactors, dependency changes, scripts, secrets, or build files.
             - The plan must be concrete enough for a patch author to produce exact replacements.
+            - Human-facing plan text must be concise Simplified Chinese.
+            - Keep Java identifiers, method names, file paths, routes, exception names, and commands unchanged.
+            - repairTarget should be one short Chinese phrase plus the relevant Java symbol when useful.
+            - rootCauseHypothesis should be one compact Chinese sentence, preferably under 80 Chinese characters.
+            - steps should contain 2-4 short Chinese action items; avoid long mixed English explanations.
             - Return only the structured RepairPlan object; no markdown, comments, or prose.
 
             RepairPlan shape:
             {
               "repairTarget": "short target",
-              "rootCauseHypothesis": "specific root cause",
+              "rootCauseHypothesis": "Chinese root cause sentence",
               "suspectedFiles": ["target-service/src/main/java/..."],
-              "steps": ["step 1", "step 2"],
+              "steps": ["Chinese step 1", "Chinese step 2"],
               "testCommand": "mvn -pl target-service test"
             }
             Only propose files under target-service/src/main or target-service/src/test.
@@ -41,17 +46,17 @@ public interface AgenticPlanAgent {
             Diagnosis: OrderService divides totalCents by quantity without guarding quantity <= 0.
             RepairPlan:
             {
-              "repairTarget": "OrderService.calculateUnitPrice quantity validation",
-              "rootCauseHypothesis": "OrderService.calculateUnitPrice divides by quantity before validating that quantity is positive, so quantity=0 triggers ArithmeticException instead of a validation error.",
+              "repairTarget": "补齐 OrderService.calculateUnitPrice 的 quantity 参数校验",
+              "rootCauseHypothesis": "quantity 为 0 时先执行除法，触发 ArithmeticException，未走预期的参数校验。",
               "suspectedFiles": [
                 "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
                 "target-service/src/test/java/com/example/targetservice/service/OrderServiceTest.java",
                 "target-service/src/test/java/com/example/targetservice/controller/OrderControllerTest.java"
               ],
               "steps": [
-                "Add a guard at the start of OrderService.calculateUnitPrice that rejects quantity <= 0 with IllegalArgumentException containing quantity.",
-                "Preserve the existing valid calculation totalCents / quantity.",
-                "Run target-service tests to verify service and controller behavior."
+                "在方法开头拒绝 quantity <= 0，并抛出包含 quantity 的 IllegalArgumentException。",
+                "保留合法入参的 totalCents / quantity 计算逻辑。",
+                "运行 target-service 测试覆盖 service 与 controller 行为。"
               ],
               "testCommand": "mvn -pl target-service test"
             }
@@ -62,16 +67,16 @@ public interface AgenticPlanAgent {
             Diagnosis: Public route mapping drifted from the API contract expected by tests.
             RepairPlan:
             {
-              "repairTarget": "OrderController quote route mapping",
-              "rootCauseHypothesis": "OrderController exposes the quote handler at a route that does not match the expected /api/orders/quote contract, causing MockMvc and clients to receive 404.",
+              "repairTarget": "恢复 OrderController.quote 的公开路由",
+              "rootCauseHypothesis": "quote 接口路由偏离 /api/orders/quote 契约，导致测试和调用方收到 404。",
               "suspectedFiles": [
                 "target-service/src/main/java/com/example/targetservice/controller/OrderController.java",
                 "target-service/src/test/java/com/example/targetservice/controller/OrderControllerTest.java"
               ],
               "steps": [
-                "Restore the @GetMapping value on OrderController.quote to /api/orders/quote.",
-                "Keep the response body and service delegation unchanged for valid inputs.",
-                "Run target-service tests to verify the route and quote response."
+                "将 OrderController.quote 的 @GetMapping 恢复为 /api/orders/quote。",
+                "保持响应体和 service 调用逻辑不变。",
+                "运行 target-service 测试验证路由和报价响应。"
               ],
               "testCommand": "mvn -pl target-service test"
             }
@@ -83,7 +88,7 @@ public interface AgenticPlanAgent {
             Diagnosis:
             {{diagnosis}}
 
-            Generate the RepairPlan.
+            Generate the RepairPlan. Human-facing fields must be concise Simplified Chinese.
             """)
     RepairPlan generateRepairPlan(@V("evidence") String evidence, @V("diagnosis") DiagnosisResult diagnosis);
 }

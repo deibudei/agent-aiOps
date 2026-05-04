@@ -6,9 +6,9 @@ import java.util.List;
 /** Carries model-proposed patch operations before Java tools apply them. */
 @Description("A minimal machine-applicable repair patch proposal.")
 public record PatchProposal(
-        @Description("Repair target from the plan.")
+        @Description("Repair target from the plan in concise Simplified Chinese; keep Java symbols unchanged.")
         String repairTarget,
-        @Description("Specific root cause fixed by this patch.")
+        @Description("Specific root cause fixed by this patch in concise Simplified Chinese.")
         String rootCause,
         @Description("Exact replacement operations to apply.")
         List<PatchOperation> operations,
