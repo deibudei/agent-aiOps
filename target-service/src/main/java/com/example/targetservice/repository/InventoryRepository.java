@@ -32,4 +32,26 @@ public class InventoryRepository {
     public int stock(String sku) {
         return findBySku(sku).stock();
     }
+
+    /**
+     * Atomically deducts stock for a given SKU.
+     * Uses ConcurrentHashMap.compute to ensure read-check-write atomicity.
+     * @throws IllegalArgumentException if SKU not found or insufficient stock
+     */
+    public InventoryItem deductStock(String sku, int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("quantity must be positive, but got: " + quantity);
+        }
+        return store.compute(sku, (key, item) -> {
+            if (item == null) {
+                throw new IllegalArgumentException("SKU not found: " + sku);
+            }
+            if (item.stock() < quantity) {
+                throw new IllegalArgumentException(
+                        "insufficient stock for " + sku + ": have " + item.stock() + ", need " + quantity);
+            }
+            return new InventoryItem(item.sku(), item.name(),
+                    item.stock() - quantity, item.reserved() + quantity);
+        });
+    }
 }

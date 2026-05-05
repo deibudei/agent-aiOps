@@ -14,21 +14,10 @@ public class InventoryService {
     }
 
     /**
-     * Deducts stock for a given SKU.
-     * BUG: No synchronization — concurrent calls can over-sell inventory.
+     * Deducts stock for a given SKU using atomic operation.
      */
     public InventoryItem deduct(String sku, int quantity) {
-        if (quantity <= 0) {
-            throw new IllegalArgumentException("quantity must be positive, but got: " + quantity);
-        }
-        InventoryItem item = repository.findBySku(sku);
-        if (item.stock() < quantity) {
-            throw new IllegalArgumentException(
-                    "insufficient stock for " + sku + ": have " + item.stock() + ", need " + quantity);
-        }
-        InventoryItem updated = new InventoryItem(item.sku(), item.name(),
-                item.stock() - quantity, item.reserved() + quantity);
-        return repository.save(updated);
+        return repository.deductStock(sku, quantity);
     }
 
     public InventoryItem getStock(String sku) {
