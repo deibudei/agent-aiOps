@@ -1,4 +1,4 @@
-package com.example.targetservice.service;
+﻿package com.example.targetservice.service;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -15,12 +15,9 @@ public class FileStorageService {
         Files.createDirectories(BASE_DIR);
     }
 
-    /** Reads only files inside the configured storage directory. */
+    /** Reads a file without checking whether the resolved path leaves BASE_DIR. */
     public String readFile(String fileName) throws IOException {
         Path filePath = BASE_DIR.resolve(fileName).toAbsolutePath().normalize();
-        if (!filePath.startsWith(BASE_DIR)) {
-            throw new IllegalArgumentException("path traversal denied: " + fileName);
-        }
         return Files.readString(filePath);
     }
 
