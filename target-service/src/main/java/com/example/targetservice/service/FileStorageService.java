@@ -1,4 +1,4 @@
-﻿package com.example.targetservice.service;
+package com.example.targetservice.service;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -15,9 +15,12 @@ public class FileStorageService {
         Files.createDirectories(BASE_DIR);
     }
 
-    /** Reads a file without checking whether the resolved path leaves BASE_DIR. */
+    /**
+     * Reads a file from the storage directory.
+     * BUG: No path traversal protection - "../" sequences allow reading arbitrary files.
+     */
     public String readFile(String fileName) throws IOException {
-        Path filePath = BASE_DIR.resolve(fileName).toAbsolutePath().normalize();
+        Path filePath = BASE_DIR.resolve(fileName);
         return Files.readString(filePath);
     }
 
