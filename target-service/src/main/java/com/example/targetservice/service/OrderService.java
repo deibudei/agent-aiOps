@@ -15,8 +15,7 @@ public class OrderService {
     }
 
     /**
-     * Calculates the discounted price for a bulk order.
-     * BUG: Uses double for intermediate calculation, causing floating-point precision loss.
+     * Calculates the discounted price for a bulk order using BigDecimal arithmetic.
      */
     public BigDecimal calculateDiscountPrice(BigDecimal total, double discountRate, int quantity) {
         if (quantity <= 0) {
@@ -25,7 +24,7 @@ public class OrderService {
         if (discountRate <= 0 || discountRate >= 1) {
             throw new IllegalArgumentException("discountRate must be between 0 and 1, but got: " + discountRate);
         }
-        double perItem = total.doubleValue() * discountRate;
-        return BigDecimal.valueOf(perItem * quantity);
+        BigDecimal discountRateBD = BigDecimal.valueOf(discountRate);
+        return total.multiply(discountRateBD).multiply(BigDecimal.valueOf(quantity));
     }
 }
