@@ -18,17 +18,20 @@ public class GitHubTools implements PullRequestProvider {
     private final ToolPolicy toolPolicy;
     private final CommandRunner commandRunner;
     private final GitHubRestPullRequestProvider restProvider;
+    private final RepairWorkspaceContext workspaceContext;
 
     /** Wires GitHub flags, repository policy, command execution, and the REST provider. */
     public GitHubTools(
             RepairProperties properties,
             ToolPolicy toolPolicy,
             CommandRunner commandRunner,
-            GitHubRestPullRequestProvider restProvider) {
+            GitHubRestPullRequestProvider restProvider,
+            RepairWorkspaceContext workspaceContext) {
         this.properties = properties;
         this.toolPolicy = toolPolicy;
         this.commandRunner = commandRunner;
         this.restProvider = restProvider;
+        this.workspaceContext = workspaceContext;
     }
 
     @Override
@@ -57,7 +60,7 @@ public class GitHubTools implements PullRequestProvider {
         command.add("--body");
         command.add(body);
         command.add("--base");
-        command.add(properties.getGit().getBaseBranch());
+        command.add(baseBranch());
         command.add("--head");
         command.add(branchName);
 
@@ -75,5 +78,9 @@ public class GitHubTools implements PullRequestProvider {
     private String clientName() {
         String client = properties.getGithub().getClient();
         return client == null ? "rest" : client.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String baseBranch() {
+        return workspaceContext.activeBaseBranch().orElse(properties.getGit().getBaseBranch());
     }
 }

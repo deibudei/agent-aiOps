@@ -19,6 +19,7 @@ public final class AgenticReadOnlyTools {
     private final boolean fileReadCacheEnabled;
     private final String sessionId;
     private final RepairEventHub eventHub;
+    private final RepairStage codeStage;
     private final Map<String, CacheEntry> fileCache = new ConcurrentHashMap<>();
 
     public AgenticReadOnlyTools(ReadLogTools readLogTools, ReadCodeTools readCodeTools) {
@@ -35,15 +36,29 @@ public final class AgenticReadOnlyTools {
             boolean fileReadCacheEnabled,
             String sessionId,
             RepairEventHub eventHub) {
+        this(readLogTools, readCodeTools, fileReadCacheEnabled, sessionId, eventHub, RepairStage.PLANNING);
+    }
+
+    public AgenticReadOnlyTools(
+            ReadLogTools readLogTools,
+            ReadCodeTools readCodeTools,
+            boolean fileReadCacheEnabled,
+            String sessionId,
+            RepairEventHub eventHub,
+            RepairStage codeStage) {
         this.readLogTools = readLogTools;
         this.readCodeTools = readCodeTools;
         this.fileReadCacheEnabled = fileReadCacheEnabled;
         this.sessionId = sessionId == null ? "" : sessionId;
         this.eventHub = eventHub;
+        this.codeStage = codeStage == null ? RepairStage.PLANNING : codeStage;
     }
 
     @Tool("Read the latest target-service traceback from logs.")
     public String readLatestTraceback(@P("Maximum characters to return") int maxChars) {
+        if (readLogTools == null) {
+            return "ReadLog is not available in this agent context.";
+        }
         String target = "target-service/logs";
         publishTool(
                 RepairStage.DETECTING,
@@ -71,17 +86,23 @@ public final class AgenticReadOnlyTools {
 
     @Tool("Read one target-service source or log file from the whitelist. Prefer readCode for source files and readLog for log files.")
     public String readFile(@P("Repository-relative target-service path") String path) {
+        if (isLogPath(path) && readLogTools == null) {
+            return "ReadLog is not available in this agent context. Use readCode for source files.";
+        }
         return isLogPath(path) ? readLog(path) : readCode(path);
     }
 
     @Tool("Read one target-service log file from the log whitelist.")
     public String readLog(@P("Repository-relative target-service log path") String path) {
+        if (readLogTools == null) {
+            return "ReadLog is not available in this agent context.";
+        }
         return readWhitelistedFile(path, "ReadLog", RepairStage.DETECTING);
     }
 
     @Tool("Read one target-service source or test file from the code whitelist.")
     public String readCode(@P("Repository-relative target-service source path") String path) {
-        return readWhitelistedFile(path, "ReadCode", RepairStage.PLANNING);
+        return readWhitelistedFile(path, "ReadCode", codeStage);
     }
 
     private String readWhitelistedFile(String path, String toolName, RepairStage stage) {
@@ -135,7 +156,7 @@ public final class AgenticReadOnlyTools {
     @Tool("Search target-service Java source files for a literal string.")
     public String searchCode(@P("Literal query string") String query) {
         publishTool(
-                RepairStage.PLANNING,
+                codeStage,
                 "tool_started",
                 "SearchCode",
                 query,
@@ -147,7 +168,7 @@ public final class AgenticReadOnlyTools {
                 ? AgenticEvidenceFormatter.trim(result.output(), AgenticEvidenceFormatter.AGENTIC_SEARCH_CHARS)
                 : "ERROR: " + result.error();
         publishTool(
-                RepairStage.PLANNING,
+                codeStage,
                 "tool_completed",
                 "SearchCode",
                 query,

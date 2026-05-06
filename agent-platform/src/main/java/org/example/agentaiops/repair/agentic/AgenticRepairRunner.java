@@ -1,7 +1,9 @@
 package org.example.agentaiops.repair.agentic;
 
 import dev.langchain4j.agentic.AgenticServices;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.example.agentaiops.config.RepairProperties;
@@ -66,6 +68,7 @@ public class AgenticRepairRunner {
     private final FeishuTools feishuTools;
     private final RepairRecordTools repairRecordTools;
     private final RepairEventHub eventHub;
+    private final FewShotService fewShotService;
 
     /** Wires deterministic operators and the LangChain4j agentic AI sub-agents. */
     public AgenticRepairRunner(
@@ -82,7 +85,8 @@ public class AgenticRepairRunner {
             GitHubTools gitHubTools,
             FeishuTools feishuTools,
             RepairRecordTools repairRecordTools,
-            RepairEventHub eventHub) {
+            RepairEventHub eventHub,
+            FewShotService fewShotService) {
         this.properties = properties;
         this.chatModelProvider = chatModelProvider;
         this.evidenceAgent = evidenceAgent;
@@ -97,6 +101,7 @@ public class AgenticRepairRunner {
         this.feishuTools = feishuTools;
         this.repairRecordTools = repairRecordTools;
         this.eventHub = eventHub;
+        this.fewShotService = fewShotService;
     }
 
     /** Returns true when the workflow has a configured LLM. */
@@ -111,12 +116,27 @@ public class AgenticRepairRunner {
         }
 
         AgenticRepairState state = new AgenticRepairState(sessionId, startedAt);
-        AgenticReadOnlyTools readOnlyTools = new AgenticReadOnlyTools(
+        AgenticReadOnlyTools planningReadOnlyTools = new AgenticReadOnlyTools(
                 readLogTools,
                 readCodeTools,
                 properties.getAgentic().isFileReadCacheEnabled(),
                 sessionId,
-                eventHub);
+                eventHub,
+                RepairStage.PLANNING);
+        AgenticReadOnlyTools patchReadOnlyTools = new AgenticReadOnlyTools(
+                readLogTools,
+                readCodeTools,
+                properties.getAgentic().isFileReadCacheEnabled(),
+                sessionId,
+                eventHub,
+                RepairStage.PATCHING);
+        AgenticReadOnlyTools reflectionReadOnlyTools = new AgenticReadOnlyTools(
+                readLogTools,
+                readCodeTools,
+                properties.getAgentic().isFileReadCacheEnabled(),
+                sessionId,
+                eventHub,
+                RepairStage.REFLECTING);
         RepairAgenticListener listener = new RepairAgenticListener(
                 state,
                 eventHub,
@@ -125,28 +145,35 @@ public class AgenticRepairRunner {
 
         AgenticDiagnosisAgent diagnosisAgent = AgenticServices.agentBuilder(AgenticDiagnosisAgent.class)
                 .chatModel(observedChatModel(state, "diagnoseRootCause", RepairModelRole.DIAGNOSIS))
-                .tools(readOnlyTools)
+                .tools(planningReadOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPlanAgent planAgent = AgenticServices.agentBuilder(AgenticPlanAgent.class)
                 .chatModel(observedChatModel(state, "generateRepairPlan", RepairModelRole.PLAN))
-                .tools(readOnlyTools)
+                .tools(planningReadOnlyTools)
                 .listener(listener)
                 .build();
         AgenticPatchAgent patchAgent = AgenticServices.agentBuilder(AgenticPatchAgent.class)
                 .chatModel(observedChatModel(state, "generatePatchProposal", RepairModelRole.PATCH))
-                .tools(readOnlyTools)
+                .tools(patchReadOnlyTools)
                 .listener(listener)
                 .build();
+        AgenticReadOnlyTools codeOnlyTools = new AgenticReadOnlyTools(
+                null, // no ReadLog — regeneration only needs source code
+                readCodeTools,
+                properties.getAgentic().isFileReadCacheEnabled(),
+                sessionId,
+                eventHub,
+                RepairStage.PATCHING);
         AgenticPatchRegenerationAgent patchRegenerationAgent = AgenticServices
                 .agentBuilder(AgenticPatchRegenerationAgent.class)
                 .chatModel(observedChatModel(state, "regeneratePatchProposal", RepairModelRole.PATCH))
-                .tools(readOnlyTools)
+                .tools(codeOnlyTools)
                 .listener(listener)
                 .build();
         AgenticReflectionAgent reflectionAgent = AgenticServices.agentBuilder(AgenticReflectionAgent.class)
                 .chatModel(observedChatModel(state, "reflectRepair", RepairModelRole.REFLECTION))
-                .tools(readOnlyTools)
+                .tools(reflectionReadOnlyTools)
                 .listener(listener)
                 .build();
 
@@ -243,9 +270,12 @@ public class AgenticRepairRunner {
             state.patchAttempts = attempt;
             PatchProposal proposal;
             if (attempt == 1) {
+                String fewShots = fewShotService.loadFewShotExamples(
+                        state.evidence != null ? state.evidence : "",
+                        state.plan != null ? state.plan.repairTarget() : "");
                 proposal = patchWithOneRetry(
                         "generatePatchProposal",
-                        () -> patchAgent.generatePatchProposal(state.plan, state.sourceContext),
+                        () -> patchAgent.generatePatchProposal(state.plan, state.sourceContext, fewShots),
                         patchParserOperator,
                         state);
             } else {
@@ -355,17 +385,109 @@ public class AgenticRepairRunner {
             AgenticRepairState state) {
         RuntimeException firstFailure = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
+            Instant modelStartedAt = Instant.now();
+            String patchAction = stepName.equals("regeneratePatchProposal")
+                    ? "regenerating patch proposal"
+                    : "generating patch proposal";
+            publishPatchModelEvent(
+                    state,
+                    stepName,
+                    attempt,
+                    "model_started",
+                    "running",
+                    true,
+                    "PatchAgent started: " + patchAction,
+                    null,
+                    null);
             try {
-                return timed(state, stepName,
+                PatchProposal proposal = timed(state, stepName,
                         () -> patchParserOperator.parsePatchProposal(proposalSupplier.get()),
                         "Patch proposal output validated");
+                publishPatchModelEvent(
+                        state,
+                        stepName,
+                        attempt,
+                        "model_completed",
+                        "completed",
+                        true,
+                        "PatchAgent completed: " + patchAction + " completed",
+                        Duration.between(modelStartedAt, Instant.now()).toMillis(),
+                        null);
+                return proposal;
             } catch (RuntimeException e) {
+                publishPatchModelEvent(
+                        state,
+                        stepName,
+                        attempt,
+                        "model_completed",
+                        "failed",
+                        false,
+                        "PatchAgent failed: " + e.getMessage(),
+                        Duration.between(modelStartedAt, Instant.now()).toMillis(),
+                        describe(e));
+                PatchProposal recovered = recoverPatchProposal(e, patchParserOperator, state);
+                if (recovered != null) {
+                    return recovered;
+                }
                 firstFailure = e;
                 eventHub.publish(state.sessionId, RepairStage.PATCHING,
                         "PatchProposal output invalid on attempt " + attempt + ": " + e.getMessage());
             }
         }
         throw firstFailure;
+    }
+
+    private void publishPatchModelEvent(
+            AgenticRepairState state,
+            String stepName,
+            int attempt,
+            String eventType,
+            String status,
+            boolean success,
+            String summary,
+            Long durationMillis,
+            String error) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("eventType", eventType);
+        details.put("toolName", "PatchAgent");
+        details.put("target", chatModelProvider.modelName(RepairModelRole.PATCH));
+        details.put("summary", summary);
+        details.put("status", status);
+        details.put("success", success);
+        details.put("source", "agentic-repair-runner");
+        details.put("stepName", stepName);
+        details.put("role", RepairModelRole.PATCH.name());
+        details.put("model", chatModelProvider.modelName(RepairModelRole.PATCH));
+        details.put("attempt", attempt);
+        details.put("timeoutSeconds", properties.getLlm().getTimeoutSeconds());
+        details.put("maxRetries", properties.getLlm().getMaxRetries());
+        if (durationMillis != null) {
+            details.put("durationMillis", durationMillis);
+        }
+        if (error != null && !error.isBlank()) {
+            details.put("error", error);
+        }
+        eventHub.publish(state.sessionId, RepairStage.PATCHING, summary, details);
+    }
+
+    private PatchProposal recoverPatchProposal(
+            RuntimeException exception,
+            PatchParserOperator patchParserOperator,
+            AgenticRepairState state) {
+        return PatchProposalOutputRecoverer.recover(exception)
+                .map(proposal -> {
+                    try {
+                        PatchProposal parsed = patchParserOperator.parsePatchProposal(proposal);
+                        eventHub.publish(state.sessionId, RepairStage.PATCHING,
+                                "Recovered PatchProposal from raw model output");
+                        return parsed;
+                    } catch (RuntimeException parseFailure) {
+                        eventHub.publish(state.sessionId, RepairStage.PATCHING,
+                                "Recovered PatchProposal was invalid: " + parseFailure.getMessage());
+                        return null;
+                    }
+                })
+                .orElse(null);
     }
 
     private void validateDiagnosis(DiagnosisResult diagnosis) {

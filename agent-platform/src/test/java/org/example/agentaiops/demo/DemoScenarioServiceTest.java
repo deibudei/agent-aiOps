@@ -139,7 +139,7 @@ class DemoScenarioServiceTest {
         properties.getGit().setEnabled(true);
         properties.getGithub().setEnabled(true);
         properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
-        when(gitTools.prepareRepairWorktreeFromBase("scenario-pr"))
+        when(gitTools.prepareRepairWorktreeFromBase("scenario-pr", "demo/fault/quantity-division-by-zero"))
                 .thenReturn(new RepairWorktreeResult(
                         true,
                         "repair/scenario-pr",
@@ -156,14 +156,22 @@ class DemoScenarioServiceTest {
     }
 
     @Test
-    void rejectsPullRequestScenarioWhenBaseBranchDoesNotMatchFaultType() {
+    void acceptsPullRequestScenarioWithAutoDerivedBaseBranch() {
         properties.getGit().setEnabled(true);
         properties.getGithub().setEnabled(true);
-        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+        properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero"); // ignored, auto-derived now
+        when(gitTools.prepareRepairWorktreeFromBase("scenario-route-pr", "demo/fault/wrong-quote-route"))
+                .thenReturn(new RepairWorktreeResult(
+                        true,
+                        "repair/scenario-route-pr",
+                        tempDir.resolve("../worktrees/scenario-route-pr").toString(),
+                        "prepared"));
 
-        assertThatThrownBy(() -> service.startPullRequestScenario(request("scenario-route-pr", "wrong-quote-route")))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("REPAIR_BASE_BRANCH=demo/fault/wrong-quote-route");
+        DemoScenarioResult result = service.startPullRequestScenario(
+                request("scenario-route-pr", "wrong-quote-route"));
+
+        assertThat(result.stage()).isEqualTo(DemoScenarioStage.WAITING_FOR_TARGET_RESTART);
+        assertThat(result.evidenceSummary()).contains("demo/fault/wrong-quote-route");
     }
 
     @Test
@@ -176,6 +184,7 @@ class DemoScenarioServiceTest {
         properties.getFeishu().setWebhookUrl("https://example.invalid/feishu-webhook");
         properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
         properties.getGit().setWorktreeRoot("../agent-aiOps-worktrees");
+        when(gitTools.baseBranchExists("demo/fault/quantity-division-by-zero")).thenReturn(true);
 
         DemoPrScenarioReadiness readiness = service.pullRequestReadiness("quantity-division-by-zero");
 
@@ -194,18 +203,35 @@ class DemoScenarioServiceTest {
         properties.getFeishu().setEnabled(true);
         properties.getFeishu().setWebhookUrl("https://example.invalid/feishu-webhook");
         properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
+        when(gitTools.baseBranchExists("demo/fault/wrong-quote-route")).thenReturn(true);
 
         DemoPrScenarioReadiness readiness = service.pullRequestReadiness("wrong-quote-route");
 
         assertThat(readiness.ready()).isFalse();
-        assertThat(readiness.baseBranchMatches()).isFalse();
+        assertThat(readiness.baseBranchMatches()).isTrue();
         assertThat(readiness.warnings()).anySatisfy(warning -> assertThat(warning)
                 .contains("REPAIR_LLM_ENABLED=true"));
-        assertThat(readiness.warnings()).anySatisfy(warning -> assertThat(warning)
-                .contains("REPAIR_BASE_BRANCH=demo/fault/wrong-quote-route"));
         assertThat(String.join("\n", readiness.warnings()))
                 .doesNotContain("secret-github-token")
                 .doesNotContain("feishu-webhook");
+    }
+
+    @Test
+    void reportsMissingAutoDerivedBaseBranchInReadiness() {
+        properties.getLlm().setEnabled(true);
+        properties.getGit().setEnabled(true);
+        properties.getGithub().setEnabled(true);
+        properties.getGithub().setToken("secret-github-token");
+        properties.getFeishu().setEnabled(true);
+        properties.getFeishu().setWebhookUrl("https://example.invalid/feishu-webhook");
+        when(gitTools.baseBranchExists("demo/fault/path-traversal")).thenReturn(false);
+
+        DemoPrScenarioReadiness readiness = service.pullRequestReadiness("path-traversal");
+
+        assertThat(readiness.ready()).isFalse();
+        assertThat(readiness.baseBranchMatches()).isFalse();
+        assertThat(readiness.warnings()).anySatisfy(warning -> assertThat(warning)
+                .contains("demo/fault/path-traversal"));
     }
 
     @Test
@@ -215,7 +241,7 @@ class DemoScenarioServiceTest {
         properties.getGithub().setEnabled(true);
         properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
         Path worktreePath = tempDir.resolve("../worktrees/scenario-pr-confirm").toAbsolutePath().normalize();
-        when(gitTools.prepareRepairWorktreeFromBase("scenario-pr-confirm"))
+        when(gitTools.prepareRepairWorktreeFromBase("scenario-pr-confirm", "demo/fault/quantity-division-by-zero"))
                 .thenReturn(new RepairWorktreeResult(
                         true,
                         "repair/scenario-pr-confirm",
@@ -224,7 +250,8 @@ class DemoScenarioServiceTest {
         HttpResponse<String> response = mock(HttpResponse.class);
         when(response.statusCode()).thenReturn(500);
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(response);
-        when(repairWorkflowService.startAsync("scenario-pr-confirm", worktreePath.toString()))
+        when(repairWorkflowService.startAsync(
+                "scenario-pr-confirm", worktreePath.toString(), "demo/fault/quantity-division-by-zero"))
                 .thenReturn(new RepairRunResponse(
                         "scenario-pr-confirm", "started", "/api/repair/stream/scenario-pr-confirm"));
         service.startPullRequestScenario(request("scenario-pr-confirm", "quantity-division-by-zero"));
@@ -233,7 +260,8 @@ class DemoScenarioServiceTest {
 
         assertThat(result.stage()).isEqualTo(DemoScenarioStage.RUNNING);
         assertThat(result.repairStreamUrl()).isEqualTo("/api/repair/stream/scenario-pr-confirm");
-        verify(repairWorkflowService).startAsync("scenario-pr-confirm", worktreePath.toString());
+        verify(repairWorkflowService).startAsync(
+                "scenario-pr-confirm", worktreePath.toString(), "demo/fault/quantity-division-by-zero");
     }
 
     @Test
@@ -243,7 +271,7 @@ class DemoScenarioServiceTest {
         properties.getGithub().setEnabled(true);
         properties.getGit().setBaseBranch("demo/fault/quantity-division-by-zero");
         Path worktreePath = tempDir.resolve("../worktrees/scenario-finished").toAbsolutePath().normalize();
-        when(gitTools.prepareRepairWorktreeFromBase("scenario-finished"))
+        when(gitTools.prepareRepairWorktreeFromBase("scenario-finished", "demo/fault/quantity-division-by-zero"))
                 .thenReturn(new RepairWorktreeResult(
                         true,
                         "repair/scenario-finished",
@@ -256,7 +284,8 @@ class DemoScenarioServiceTest {
         } catch (Exception e) {
             throw new AssertionError(e);
         }
-        when(repairWorkflowService.startAsync("scenario-finished", worktreePath.toString()))
+        when(repairWorkflowService.startAsync(
+                "scenario-finished", worktreePath.toString(), "demo/fault/quantity-division-by-zero"))
                 .thenReturn(new RepairRunResponse(
                         "scenario-finished", "started", "/api/repair/stream/scenario-finished"));
         when(repairRecordTools.readRecord("scenario-finished"))

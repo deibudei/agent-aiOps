@@ -10,7 +10,16 @@ public enum DemoFaultType {
             "Change the quote endpoint path so controller tests fail with 404."),
     WRONG_ERROR_STATUS(
             "wrong-error-status",
-            "Return HTTP 500 for validation errors instead of HTTP 400.");
+            "Return HTTP 500 for validation errors instead of HTTP 400."),
+    PRECISION_LOSS(
+            "precision-loss",
+            "Use double for discount calculation, causing floating-point precision loss."),
+    RACE_CONDITION(
+            "race-condition",
+            "Missing synchronization in inventory deduction causes over-selling under concurrent load."),
+    PATH_TRAVERSAL(
+            "path-traversal",
+            "Missing path validation in file download allows reading arbitrary files via '../'.");
 
     private final String wireName;
     private final String description;

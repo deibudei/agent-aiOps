@@ -57,6 +57,23 @@ public class GitTools {
         return parseChangedFiles(result.output());
     }
 
+    /** Checks whether a local or fetched remote base branch is visible without changing the worktree. */
+    public boolean baseBranchExists(String baseBranch) {
+        if (!hasText(baseBranch)) {
+            return false;
+        }
+        CommandResult local = runGitAt(
+                toolPolicy.homeWorkspaceRoot(), "rev-parse", "--verify", "--quiet", baseBranch);
+        if (local.success()) {
+            return true;
+        }
+        CommandResult remote = runGitAt(
+                toolPolicy.homeWorkspaceRoot(),
+                "rev-parse", "--verify", "--quiet",
+                properties.getGit().getRemote() + "/" + baseBranch);
+        return remote.success();
+    }
+
     /** Parses git output while ignoring environment warning lines. */
     static List<String> parseChangedFiles(String output) {
         return Arrays.stream(output.split("\\R"))
@@ -231,9 +248,20 @@ public class GitTools {
             }
         }
 
-        CommandResult add = runGit("add", "target-service");
+        CommandResult add = runGit("add", "--", targetSourcePath("src/main"), targetSourcePath("src/test"));
         if (!add.success()) {
             return failed(branchName, commitMessage, add);
+        }
+
+        List<String> stagedFiles = stagedTargetFiles();
+        if (stagedFiles.isEmpty()) {
+            return new GitCommitResult(false, branchName, commitMessage,
+                    "No target-service source or test changes were staged for commit");
+        }
+        if (!allChangedFilesAllowed(stagedFiles)) {
+            return new GitCommitResult(false, branchName, commitMessage,
+                    "Staged files include paths outside target-service/src/main or target-service/src/test: "
+                            + stagedFiles);
         }
 
         CommandResult commit = runGit("commit", "-m", commitMessage);
@@ -294,10 +322,11 @@ public class GitTools {
 
     /** Prepares an isolated repair worktree from the configured committed demo fault base branch. */
     public RepairWorktreeResult prepareRepairWorktreeFromBase(String sessionId) {
-        if (!properties.getGit().isEnabled()) {
-            return new RepairWorktreeResult(false, "", "", "Git is disabled; cannot prepare PR demo worktree");
-        }
-        String baseBranch = properties.getGit().getBaseBranch();
+        return prepareRepairWorktreeFromBase(sessionId, properties.getGit().getBaseBranch());
+    }
+
+    /** Prepares an isolated repair worktree from a specific base branch (auto-derived from fault type). */
+    public RepairWorktreeResult prepareRepairWorktreeFromBase(String sessionId, String baseBranch) {
         if (!hasText(baseBranch)) {
             return new RepairWorktreeResult(false, "", "", "repair.git.base-branch is empty");
         }
@@ -319,7 +348,7 @@ public class GitTools {
         }
 
         CommandResult fetch = runGitAt(toolPolicy.homeWorkspaceRoot(), "fetch", properties.getGit().getRemote(), baseBranch);
-        if (!fetch.success()) {
+        if (!fetch.success() && !baseBranchExists(baseBranch)) {
             return failedWorktree(branchName, worktreePath, fetch);
         }
 
@@ -357,6 +386,20 @@ public class GitTools {
     /** Confirms every changed file stays inside the write whitelist. */
     public boolean allChangedFilesAllowed(List<String> changedFiles) {
         return changedFiles.stream().allMatch(toolPolicy::isAllowedChangedFile);
+    }
+
+    private List<String> stagedTargetFiles() {
+        CommandResult result = runGit("diff", "--cached", "--name-only", "--", "target-service");
+        if (!result.success() || result.output().isBlank()) {
+            return List.of();
+        }
+        return parseChangedFiles(result.output());
+    }
+
+    private String targetSourcePath(String childPath) {
+        String rootPath = properties.getTargetProject().getRootPath();
+        String root = rootPath == null || rootPath.isBlank() ? "target-service" : rootPath;
+        return (root + "/" + childPath).replace('\\', '/');
     }
 
     /** Runs a git command from the repository root. */

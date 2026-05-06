@@ -19,7 +19,6 @@ import {
   GitBranch,
   GitPullRequest,
   History,
-  LayoutDashboard,
   ListChecks,
   MessagesSquare,
   Moon,
@@ -89,6 +88,11 @@ interface ToolEventView {
   success: boolean | null;
   summary: string;
   durationMillis: number | null;
+}
+
+interface SplitDiffRow {
+  left: RepairDiffLine | null;
+  right: RepairDiffLine | null;
 }
 
 interface ChatItem {
@@ -199,6 +203,33 @@ const faultMetas: FaultMeta[] = [
     evidence: '失败测试输出写入 tracebacks',
     baseBranch: 'demo/fault/wrong-error-status',
   },
+  {
+    type: 'precision-loss',
+    label: '折扣金额精度丢失',
+    shortLabel: '精度',
+    priority: 'P1',
+    description: 'double 计算折扣导致浮点精度误差，预期 199.96 得到 199.96000000000004。',
+    evidence: '失败测试输出写入 tracebacks',
+    baseBranch: 'demo/fault/precision-loss',
+  },
+  {
+    type: 'race-condition',
+    label: '库存并发竞态超卖',
+    shortLabel: '并发',
+    priority: 'P1',
+    description: '库存扣减无锁保护，并发请求导致超卖（预期扣 10 剩 0，实际剩 2-3）。',
+    evidence: '失败测试输出写入 tracebacks',
+    baseBranch: 'demo/fault/race-condition',
+  },
+  {
+    type: 'path-traversal',
+    label: '文件下载路径遍历',
+    shortLabel: '安全',
+    priority: 'P1',
+    description: '未校验文件名中的 ../ 序列，攻击者可读取任意文件。',
+    evidence: '失败测试输出写入 tracebacks',
+    baseBranch: 'demo/fault/path-traversal',
+  },
 ];
 
 const stageDefs: StageDef[] = [
@@ -221,7 +252,6 @@ const navItems: NavItem[] = [
   { id: 'tools', label: 'Tool Trace', description: '工具审计日志', icon: Wrench },
   { id: 'artifacts', label: 'Artifacts', description: '根因、测试、反思', icon: FileText },
   { id: 'records', label: 'Records', description: '修复记录归档', icon: History },
-  { id: 'score', label: 'Judge Evidence', description: '评分证据映射', icon: LayoutDashboard },
 ];
 
 const workbenchStages: WorkbenchStage[] = [
@@ -362,7 +392,7 @@ const activeTool = computed(() => {
 });
 
 const requiredToolCoverage = computed(() =>
-  ['ReadLog', 'ReadCode', 'SearchCode', 'RunTest', 'GitCommit', 'GitHub PR', 'Feishu'].map((toolName) => ({
+  ['ReadLog', 'ReadCode', 'PatchAgent', 'RunTest', 'GitCommit', 'GitHub PR', 'Feishu'].map((toolName) => ({
     toolName,
     present: primaryToolEvents.value.some((event) => event.toolName === toolName),
   })),
@@ -472,8 +502,8 @@ const feishuStatusClass = computed(() =>
 );
 const preflightChecks = computed<ReadinessCheck[]>(() => [
   { label: '代码仓库可访问', ok: readiness.value?.gitEnabled ?? false },
-  { label: '测试环境可用', ok: readiness.value?.baseBranchMatches ?? false },
-  { label: '日志中心可访问', ok: faults.value.length > 0 },
+  { label: 'LLM 修复引擎可用', ok: readiness.value?.llmEnabled ?? false },
+  { label: '基础分支匹配', ok: readiness.value?.baseBranchMatches ?? false },
   { label: 'Git 凭证可用', ok: readiness.value?.gitEnabled ?? false },
   { label: '飞书 Webhook 可用', ok: readiness.value?.feishuEnabled ?? false },
   { label: 'GitHub Token 可用', ok: readiness.value?.githubEnabled ?? false },
@@ -874,14 +904,16 @@ function stageStateForWorkbench(stage: WorkbenchStage) {
 function isToolEvent(event: RepairEvent) {
   const eventType = stringDetail(event, 'eventType');
   return eventType.includes('tool')
+    || eventType.includes('model')
     || ['RunTest', 'GitCommit', 'ReadLog', 'ReadCode', 'SearchCode'].includes(stringDetail(event, 'toolName'))
+    || stringDetail(event, 'toolName') === 'PatchAgent'
     || isEvidenceReadLogEvent(event)
     || event.stage === 'pr_created'
     || event.stage === 'notified';
 }
 
 function isPrimaryTool(toolName: string) {
-  return ['ReadLog', 'ReadCode', 'SearchCode', 'RunTest', 'GitCommit', 'GitHub PR', 'Feishu'].includes(toolName);
+  return ['ReadLog', 'ReadCode', 'SearchCode', 'PatchAgent', 'RunTest', 'GitCommit', 'GitHub PR', 'Feishu'].includes(toolName);
 }
 
 function isNoisyAgentEvent(event: RepairEvent) {
@@ -1074,6 +1106,9 @@ function toolSentence(tool: ToolEventView) {
   if (tool.toolName === 'SearchCode') {
     return `${toolActionText(tool, '搜索代码')}${target}`;
   }
+  if (tool.toolName === 'PatchAgent') {
+    return `${toolActionText(tool, '生成补丁')}${target}`;
+  }
   if (tool.toolName === 'RunTest') {
     return `${toolActionText(tool, '运行测试')}${target}`;
   }
@@ -1107,6 +1142,7 @@ function toolTitle(toolName: string) {
     ReadLog: 'ReadLog / 读取日志',
     ReadCode: 'ReadCode / 读取代码',
     SearchCode: 'SearchCode / 搜索代码',
+    PatchAgent: 'PatchAgent / 生成补丁',
     RunTest: 'Run Test / 运行测试',
     GitCommit: 'Git Commit / 提交分支',
     'GitHub PR': 'GitHub PR / 创建 PR',
@@ -1122,6 +1158,9 @@ function toolIcon(toolName: string) {
   }
   if (toolName === 'ReadCode' || toolName === 'SearchCode') {
     return Code2;
+  }
+  if (toolName === 'PatchAgent') {
+    return BrainCircuit;
   }
   if (toolName === 'RunTest') {
     return FlaskConical;
@@ -1233,6 +1272,9 @@ function generateSessionId(type: FaultType) {
     'quantity-division-by-zero': 'pr-quantity',
     'wrong-quote-route': 'pr-route',
     'wrong-error-status': 'pr-status',
+    'precision-loss': 'pr-precision',
+    'race-condition': 'pr-race',
+    'path-traversal': 'pr-traversal',
   };
   const now = new Date();
   const stamp = [
@@ -1573,6 +1615,9 @@ function diffLineClass(type: string) {
   if (type === 'meta') {
     return 'line-meta';
   }
+  if (type === 'empty') {
+    return 'line-empty';
+  }
   return 'line-context';
 }
 
@@ -1656,12 +1701,40 @@ function formatSseEvent(event: RepairEvent) {
   ];
 }
 
-function leftSplitLines(hunk: RepairDiffHunk): RepairDiffLine[] {
-  return hunk.lines.filter((line) => line.type !== 'add');
-}
-
-function rightSplitLines(hunk: RepairDiffHunk): RepairDiffLine[] {
-  return hunk.lines.filter((line) => line.type !== 'delete');
+function splitDiffRows(hunk: RepairDiffHunk): SplitDiffRow[] {
+  const rows: SplitDiffRow[] = [];
+  let index = 0;
+  while (index < hunk.lines.length) {
+    const line = hunk.lines[index];
+    if (line.type === 'delete') {
+      const deletes: RepairDiffLine[] = [];
+      const adds: RepairDiffLine[] = [];
+      while (index < hunk.lines.length && hunk.lines[index]?.type === 'delete') {
+        deletes.push(hunk.lines[index]);
+        index += 1;
+      }
+      while (index < hunk.lines.length && hunk.lines[index]?.type === 'add') {
+        adds.push(hunk.lines[index]);
+        index += 1;
+      }
+      const pairCount = Math.max(deletes.length, adds.length);
+      for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
+        rows.push({
+          left: deletes[pairIndex] ?? null,
+          right: adds[pairIndex] ?? null,
+        });
+      }
+      continue;
+    }
+    if (line.type === 'add') {
+      rows.push({ left: null, right: line });
+      index += 1;
+      continue;
+    }
+    rows.push({ left: line, right: line });
+    index += 1;
+  }
+  return rows;
 }
 
 function outcomeClass(value?: string | null) {
@@ -1817,11 +1890,6 @@ function prefersReducedMotion() {
             <small>{{ item.description }}</small>
           </span>
         </button>
-        <div class="nav-env">
-          <strong>赛训环境</strong>
-          <span><i></i> online</span>
-          <small>v1.0.0-rc.3</small>
-        </div>
       </nav>
 
       <section v-if="activeView === 'run'" class="view-grid run-view" aria-label="Run console">
@@ -2140,7 +2208,7 @@ function prefersReducedMotion() {
                 <span class="mono" role="cell">{{ toolDuration(tool) }}</span>
               </div>
               <div v-if="primaryToolEvents.length === 0" class="mini-tool-row empty" role="row">
-                <span role="cell">等待 ReadLog / ReadCode / RunTest / GitCommit / GitHub PR / Feishu 工具事件。</span>
+                <span role="cell">等待 ReadLog / ReadCode / PatchAgent / RunTest / GitCommit / GitHub PR / Feishu 工具事件。</span>
               </div>
             </div>
           </section>
@@ -2177,14 +2245,14 @@ function prefersReducedMotion() {
                     <div><dt>耗时</dt><dd class="mono">{{ toolDuration(activeTool) }}</dd></div>
                   </dl>
                 </template>
-                <p v-else>等待 Agent 调用 ReadLog / ReadCode / RunTest / GitCommit。</p>
+                <p v-else>等待 Agent 调用 ReadLog / ReadCode / PatchAgent / RunTest / GitCommit。</p>
               </section>
             </section>
 
-            <section class="panel sse-panel" aria-label="端给 SSE 详情">
+            <section class="panel sse-panel" aria-label="SSE 详情">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">端给 SSE 详情（只读）</p>
+                  <p class="eyebrow">SSE 详情（只读）</p>
                   <h2>{{ selectedChatItem?.title ?? inspectorEvent?.stage ?? 'SSE' }}</h2>
                 </div>
                 <button class="secondary-button compact" type="button" @click="copySseRaw">
@@ -2236,39 +2304,33 @@ function prefersReducedMotion() {
                   <span class="diff-stat delete">-{{ selectedDiffFile.deletions }}</span>
                 </div>
                 <template v-if="diffViewMode === 'split'">
-                  <section v-for="hunk in selectedDiffFile.hunks.slice(0, 2)" :key="hunk.header" class="split-hunk">
+                  <section v-for="hunk in selectedDiffFile.hunks" :key="hunk.header" class="split-hunk">
                     <div class="preview-hunk mono">{{ hunk.header }}</div>
                     <div class="split-diff-grid">
-                      <div class="split-column">
+                      <template v-for="(row, rowIndex) in splitDiffRows(hunk)" :key="`${hunk.header}-${rowIndex}`">
                         <div
-                          v-for="(line, lineIndex) in leftSplitLines(hunk).slice(0, 16)"
-                          :key="`left-${hunk.header}-${lineIndex}`"
-                          class="preview-diff-line"
-                          :class="diffLineClass(line.type)"
+                          class="preview-diff-line split-side"
+                          :class="[diffLineClass(row.left?.type ?? 'empty'), { 'line-placeholder': !row.left }]"
                         >
-                          <span class="mono">{{ line.oldLineNumber ?? '' }}</span>
-                          <code v-html="highlightCode(line.content)"></code>
+                          <span class="mono">{{ row.left?.oldLineNumber ?? '' }}</span>
+                          <code v-html="highlightCode(row.left?.content ?? '')"></code>
                         </div>
-                      </div>
-                      <div class="split-column">
                         <div
-                          v-for="(line, lineIndex) in rightSplitLines(hunk).slice(0, 16)"
-                          :key="`right-${hunk.header}-${lineIndex}`"
-                          class="preview-diff-line"
-                          :class="diffLineClass(line.type)"
+                          class="preview-diff-line split-side"
+                          :class="[diffLineClass(row.right?.type ?? 'empty'), { 'line-placeholder': !row.right }]"
                         >
-                          <span class="mono">{{ line.newLineNumber ?? '' }}</span>
-                          <code v-html="highlightCode(line.content)"></code>
+                          <span class="mono">{{ row.right?.newLineNumber ?? '' }}</span>
+                          <code v-html="highlightCode(row.right?.content ?? '')"></code>
                         </div>
-                      </div>
+                      </template>
                     </div>
                   </section>
                 </template>
                 <template v-else>
-                  <section v-for="hunk in selectedDiffFile.hunks.slice(0, 2)" :key="hunk.header" class="preview-diff-lines">
+                  <section v-for="hunk in selectedDiffFile.hunks" :key="hunk.header" class="preview-diff-lines">
                     <div class="preview-hunk mono">{{ hunk.header }}</div>
                     <div
-                      v-for="(line, lineIndex) in hunk.lines.slice(0, 26)"
+                      v-for="(line, lineIndex) in hunk.lines"
                       :key="`${hunk.header}-${lineIndex}`"
                       class="preview-diff-line"
                       :class="diffLineClass(line.type)"
@@ -2314,7 +2376,7 @@ function prefersReducedMotion() {
 
           <div v-if="allToolEvents.length === 0" class="empty-state">
             <Wrench :size="24" />
-            <p>启动 Demo 后，这里会按时间展示 ReadLog、ReadCode、RunTest、GitCommit 等工具调用。</p>
+            <p>启动 Demo 后，这里会按时间展示 ReadLog、ReadCode、PatchAgent、RunTest、GitCommit 等工具调用。</p>
           </div>
 
           <div v-else class="tool-event-list" role="list" aria-label="Tool events">

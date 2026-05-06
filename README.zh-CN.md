@@ -1,496 +1,290 @@
 # Agent AI Ops
 
-基于 Java 的服务自动化修复 Agent 演示项目。
-
-## 项目模块
-
-- `agent-platform`：自动修复 Agent 平台，负责读取异常、规划修复、修改代码、运行测试、创建 PR、发送飞书通知和生成修复记录。
-- `target-service`：被监控和被修复的 Spring Boot 示例服务，内置一个参数校验类 bug，用于比赛演示。
-- `frontend`：Vue 3 + Vite + TypeScript 评委演示驾驶舱，构建产物由 `agent-platform` 托管。
-
-## 核心流程
+基于 Agent 的服务自动化修复系统。项目用于演示一条完整闭环：
 
 ```text
-服务报错
--> 读取 Traceback
--> 诊断根因 (AI Agent)
--> 生成修复计划 (AI Agent)
--> 准备源码上下文
--> 生成补丁 (AI Agent)
--> 应用补丁 (Java，写文件唯一通道)
--> 运行测试
-   ├── 测试通过 -> 继续
-   └── 测试失败 + 还有 attempt -> 回滚 -> 把 stderr 喂回 Patch Agent 重写 (Reflexion)
--> 审查 diff
--> 创建 repair 分支并 commit
--> 通过 GitHub REST API 创建 PR
--> 发送飞书 v2 卡片（含耗时/token、查看 PR 按钮）
--> 反思沉淀
--> 生成修复记录
+服务报错 -> Agent 读取 Traceback -> 分析根因 -> 自动修改代码 -> 运行测试
+-> 创建 GitHub PR -> 飞书通知开发者 Review -> 生成修复记录和反思沉淀
 ```
 
-修复链路是一条确定性的 Java DAG：4 个 LangChain4j AI 子 Agent 只负责语言任务（诊断、规划、补丁/重写补丁、反思），其余节点全部由 Java 顺序调用，不依赖 LLM 决策。第一版采用手动按钮/API 触发，LLM、GitHub PR 和飞书通知默认关闭，录制比赛演示时通过环境变量开启真实 PR 和真实飞书卡片即可。
+当前实现是一个 Java 多模块演示系统：`agent-platform` 负责修复编排，`target-service` 是被修复服务，`frontend` 是评委演示控制台。
 
-## 当前 Agent 成熟度
+## Git 描述
 
-当前代码已经打通后端闭环，并收敛为「确定性 Java DAG + 4 个 LangChain4j AI 子 Agent」单一路径：
-
-- 已实现：异常读取、诊断、计划、代码读取、补丁生成、补丁回写、测试执行、reflexion 测试失败重写、diff review、Git commit/push、GitHub REST API 创建 PR、飞书 v2 卡片、修复记录和反思沉淀。
-- 编排方式：`AgenticRepairRunner` 用 Java 顺序调用各 operator，不再使用 `SupervisorAgent`；AI 子 Agent 通过 `AgenticServices.agentBuilder` 直接构造和调用，其它节点（证据、补丁应用、测试、审查、commit、PR、飞书、记录）都是 non-AI Java 组件。
-- AI 角色：`AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent`、`AgenticReflectionAgent` 都返回强类型对象（`DiagnosisResult` / `RepairPlan` / `PatchProposal` / `RepairReflection`），字段使用 LangChain4j `@Description` 描述。`AgenticPatchAgent.regeneratePatchFromTestFailure` 在 reflexion 重试中根据测试 stderr 重写补丁；结构化输出会经过 Java 校验，格式/业务校验失败会重试一次。
-- Reflexion：`repair.workflow.max-patch-attempts` 控制重写次数（默认 2）。一次补丁应用前会先快照原文件内容，测试失败后回滚到该快照再重新生成补丁，避免错叠多份补丁。
-- GitHub 集成：默认走 GitHub REST API（`repair.github.client=rest`），不依赖 `gh CLI`。Owner/Repo 优先读 `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO`，未配置时自动从 `git remote get-url origin` 解析 HTTPS/SSH URL。
-- 飞书 v2 卡片：成功修复和失败修复使用不同标题/文案，卡片内容包括根因摘要、Review 结论、PR 链接、总耗时、token 消耗（provider 返回 usage 时展示真实值，否则明确显示未返回/未采集，不再显示 0），并提供「查看 PR」按钮和会话 footer；如果配置 `FEISHU_SIGNING_SECRET`，请求体会带上 `timestamp` + `sign` 校验。
-- 已验证：`pr-quantity-002` 通过 PR-safe 一键 Demo 在已提交故障的 `demo/fault/quantity-division-by-zero` base 分支上跑通完整比赛链路：读取独立 traceback、定位 `OrderService.calculateUnitPrice`、生成并应用补丁、跑通 `target-service` 5 个测试、通过 review、push `repair/pr-quantity-002`、创建 GitHub PR [#3](https://github.com/deibudei/agent-aiOps/pull/3)、发送飞书「已修复，请 Review」卡片，并写入 `repair-records/pr-quantity-002.json` / `.md`，最终 `outcome=FIXED`。
-- 当前限制：修复运行必须配置 `REPAIR_LLM_ENABLED=true` 和对应 provider API key；模型不可用或结构化输出连续两次非法会发布 `ERROR`，并写入最小错误记录，不再走确定性 fallback。写文件仍只能通过 `PatchTools + ToolPolicy`，不能让模型直接落盘。
-
-## 当前实现状态与下一步
-
-当前纵向 MVP 和真实 PR + 飞书主链路已经跑通，重点不再是“是否能调用模型”，而是把比赛演示流程沉淀为可复用的一键 Demo 编排、单次故障验收和修复记录索引。
-
-已完成：
-
-- 结构化证据：`EvidenceBundle` 聚合 traceback、baseline tests、候选文件和源码片段。
-- Agentic 诊断：LangChain4j Agentic 子 Agent 直接返回强类型 `DiagnosisResult`，字段使用 `@Description` 描述。
-- Agentic 规划：LangChain4j Agentic 子 Agent 直接返回强类型 `RepairPlan`，字段使用 `@Description` 描述，并在 prompt 中提供两个 few-shot 示例。
-- Agentic 补丁：LangChain4j Agentic 子 Agent 直接返回强类型 `PatchProposal`，字段使用 `@Description` 描述，并由 Java gate 做业务校验。
-- 安全执行：`PatchTools + ToolPolicy` 是唯一写文件通道。
-- 审查门禁：路径越界、空 diff、测试失败、review 不通过都会阻断后续 commit/PR/飞书。
-- Agentic 编排：`AgenticRepairRunner` 负责装配并顺序调用 Java DAG，AI Agent 拆在 `repair/agentic/agents`，non-AI 执行节点拆在 `repair/agentic/operators`。
-- 修复耗时与 token 观测：`RepairTiming` 记录总耗时、每个 Java DAG 节点耗时、模型名称和 token 消耗；`ObservedChatModel` 在模型边界直接采集 `ChatResponse.tokenUsage()`，并写入 SSE、JSON 记录、Markdown 记录和飞书卡片。部分 OpenAI-compatible provider 不返回 token usage 时，记录中的 token 字段保持为空，飞书卡片明确显示 provider 未返回 token usage。
-- 演示故障：已提供 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 三类故障注入 API。
-- 一键 Demo 编排：`POST /api/demo/scenarios/start` 注入源码级故障并进入 `WAITING_FOR_TARGET_RESTART`；重启 `target-service` 后调用 `POST /api/demo/scenarios/{sessionId}/confirm-target-restarted`，平台会准备最新 traceback/测试失败证据并启动修复。
-- 修复记录索引：`GET /api/repair/records` 会聚合 `repair-records/*.json`，返回 outcome、耗时、token、patch attempt、测试结果、PR 和飞书状态，方便后续前端或实验报告消费。
-- 修复记录详情：`GET /api/repair/records/{sessionId}` 返回完整 `RepairRecord`，用于前端展示根因、计划、补丁、测试、PR、飞书和反思。
-- PR-safe 演示预检：`GET /api/demo/pr-scenarios/readiness?faultType=...` 返回 LLM/Git/GitHub/Feishu/base branch/worktree 的只读状态和 warnings，不返回任何密钥。
-- 前端演示驾驶舱：`frontend/` 已实现专业修复会话工作台，支持三类故障选择、PR-safe 启动、自动重启 target-service（失败时保留手动兜底）、ChatOps 风格 SSE 过程、Tool Trace、Artifacts、GitHub-like PR Diff 和评分维度证据区；默认主演示 `quantity-division-by-zero`。
-- 结构化 PR Diff：修复记录保留提交前 `diffSummary`，同时写入 `diffFiles[]`（文件、状态、增删行、hunk、行级内容），所以前端可在 PR Diff 页直接展示 Agent 到底改了哪些代码。
-- 结构化工具事件：SSE 对 `ReadLog`、`ReadCode`、`RunTest`、`GitCommit` 增加 `eventType`、`toolName`、`target`、`status`、`success` 和摘要，前端可直接作为 Tool Use 证据展示。
-- 修复结果：SSE completed 事件和修复记录写入 `outcome=FIXED|FAILED|ERROR` 与 `outcomeReason`。patch/test/review/PR 的受控失败是 `COMPLETED + FAILED`；系统异常是 `ERROR`，并写入最小错误记录。
-
-### 真实 PR 演示分支模型
-
-`main` 永远保持正常修复态。真实 PR 演示不要在 `main` 上临时注入故障后期待 diff；应使用一条已经提交故障的 demo base 分支：
+当前 `main` 分支是上传安全的正常修复态，不直接携带演示故障。真实 PR 演示通过独立故障 base 分支完成：
 
 ```text
-main                                  正常修复态
-demo/fault/quantity-division-by-zero  当前 main + 已提交的除零故障
-repair/{sessionId}                    Agent 自动创建的修复分支
+main                                  正常修复态；平台代码、前端代码、target-service 基线都应可运行
+demo/fault/{faultType}                从当前 main 派生，只包含一个有意注入的故障
+repair/{sessionId}                    Agent 在独立 worktree 中创建的自动修复分支
+repair-records/{sessionId}.json|md    每次修复闭环的结构化记录和 Markdown 记录
 ```
 
-录制真实 PR 演示时设置：
+PR-safe 演示不会在主工作区切分支，也不会把临时故障写进 `main`。`POST /api/demo/pr-scenarios/start` 会根据 `faultType` 自动选择 `demo/fault/{faultType}`，并在 `REPAIR_WORKTREE_ROOT/{sessionId}` 创建 `repair/{sessionId}` worktree。Agent 只在该 worktree 里修改和测试 `target-service`。
 
-```powershell
-$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
-```
+提交边界：
 
-这样 PR 会从 `repair/{sessionId}` 指向 `demo/fault/quantity-division-by-zero`，diff 只展示 Agent 把故障代码修回正确代码。旧的 `repair-demo-target` 不再作为比赛主演示 base，因为它可能落后当前 `main` 太多。
-PR-safe scenario 会在 `REPAIR_WORKTREE_ROOT` 下创建独立 git worktree 承载 `repair/{sessionId}`，所以主工作区可以一直停在 `main`，修复分支在独立目录里完成补丁、测试、commit 和 push。
+- 修复工具只能写 `target-service/src/main` 和 `target-service/src/test`。
+- Git commit 只会 stage `target-service/src/main` 与 `target-service/src/test`。
+- 测试产生的运行时文件，例如 `target-service/files/welcome.txt`、日志、`repair-records/`，不应进入修复 PR。
+- `application-local.yml`、API key、Webhook、local reports 均保持 gitignored。
 
-PR-safe scenario 的运行心智模型：
+## Change Description
+
+**Title: Expand PR-safe Repair Demo and Workflow Guardrails**
+
+本次变更围绕复赛演示闭环做了集中增强：在保持 `main` 为正常修复态的前提下，补齐并验证了 `precision-loss`、`race-condition`、`path-traversal` 等更贴近真实业务的故障场景，使 PR-safe 演示可以按 `faultType` 自动选择 `demo/fault/{faultType}` 单故障 base 分支，并在独立 worktree 中完成修复、测试、提交和 PR。
+
+Agent 修复链路也做了工程化加固：Patch Agent 继续输出强类型补丁 proposal，DAG 负责路径校验、oldText 精确匹配、原子应用、回归测试和 Review Gate；当测试失败时，Reflexion 会先回滚再基于失败输出重写补丁。补丁阶段的读代码和搜索事件被归类到 `patching`，避免前端时间线误回到计划阶段。
+
+Git 与交付边界进一步收紧：提交修复分支时只 stage `target-service/src/main` 和 `target-service/src/test`，避免测试运行时文件、日志或本地记录进入 PR。修复记录继续保留 diff、测试、PR、飞书、耗时、token 和反思信息，便于复赛视频展示完整闭环。
+
+## 模块结构
 
 ```text
-1. 先在 main 上启动 agent-platform。
-2. POST /api/demo/pr-scenarios/start 会从 demo/fault/{faultType}
-   在 REPAIR_WORKTREE_ROOT/{sessionId} 创建 repair/{sessionId} worktree。
-3. 只从这个 worktree 路径重启 target-service，让它加载故障代码。
-   Vue 驾驶舱会自动调用 `POST /api/demo/pr-scenarios/{sessionId}/restart-target-service`，
-   同时保留手动命令作为失败兜底。
-4. POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted。
-5. agent-platform 是已经启动的 JVM，继续使用 main 编译出的编排代码；
-   但修复工具读写和测试的是独立 worktree 下的 target-service。
-6. 测试通过后 commit、push repair/{sessionId}，创建 GitHub PR，并发送飞书。
+agent-aiOps/
+├── agent-platform/   Spring Boot Agent 后端，端口 9901
+├── target-service/   Spring Boot 被修复服务，端口 9910
+├── frontend/         Vue 3 + Vite + TypeScript 演示控制台
+├── repair-records/   自动修复记录输出目录，gitignored
+└── AGENTS.md         Codex/终端会话的项目上下文
 ```
 
-在 SSE 出现 `completed`、`repair-records/{sessionId}.json` / `.md` 写完之前，不要删除 active worktree、删除 `repair/{sessionId}`、重启 `agent-platform`，也不要编辑 README 或平台代码。演示完成后再清理一次性 `repair/*` 分支和 worktree。
+核心职责：
 
-后续项目更新仍然在 `main` 或面向 `main` 的普通 feature 分支上做，不要在 `demo/fault/...` 或 `repair/{sessionId}` 分支上改文档/平台代码。`main` 更新后，需要从最新 `main` 刷新 demo 故障分支，并让这条分支只保留一个“故障注入”提交；`repair/{sessionId}` 分支只是每次演示的自动修复产物，用完即可关闭或删除。
+- `agent-platform`：读取证据、调用 AI 子 Agent、应用补丁、运行测试、审查 diff、提交分支、创建 GitHub PR、发送飞书通知、写修复记录。
+- `target-service`：提供订单报价、折扣计算、库存扣减、文件下载等示例业务接口，并承载可修复故障。
+- `frontend`：展示 readiness、故障选择、PR-safe 启动、Tool Trace、Artifacts、PR Diff、修复记录和评分证据。
 
-当 `main` 更新后，需要重建 demo 故障 base 时：
+## 完整流程图
 
-```powershell
-git checkout main
-git pull
-git checkout -B demo/fault/quantity-division-by-zero main
-# 只注入 quantity-division-by-zero 故障，然后提交这个故障
-git push --force-with-lease origin demo/fault/quantity-division-by-zero
+```mermaid
+flowchart TD
+    A["操作员在 Vue 控制台选择 faultType"] --> B["GET /api/demo/pr-scenarios/readiness"]
+    B --> C{"预检通过?"}
+    C -- "否" --> C1["显示 LLM/Git/GitHub/Feishu/base branch/worktree warnings"]
+    C -- "是" --> D["POST /api/demo/pr-scenarios/start"]
+    D --> E["GitTools 从 demo/fault/{faultType} 创建 repair/{sessionId} worktree"]
+    E --> F["重启 target-service，运行 worktree 中的故障代码"]
+    F --> G["POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted"]
+    G --> H["准备证据：HTTP Traceback 或测试失败日志"]
+    H --> I["POST /api/repair/run 启动 Java DAG"]
+
+    subgraph DAG["AgenticRepairRunner：确定性 Java DAG"]
+        I --> J["EvidenceOperator 读取 target-service/logs 与候选源码"]
+        J --> K["AgenticDiagnosisAgent 输出 DiagnosisResult"]
+        K --> L["AgenticPlanAgent 输出 RepairPlan"]
+        L --> M["SourceContextOperator 准备源码上下文"]
+        M --> N["AgenticPatchAgent 生成 PatchProposal"]
+        N --> O["PatchParserOperator 校验强类型补丁"]
+        O --> P["PatchApplyOperator 快照并应用补丁"]
+        P --> Q["TestOperator 运行 target-service 测试"]
+        Q --> R{"测试通过?"}
+        R -- "否，仍有尝试次数" --> S["PatchApplyOperator 回滚到快照"]
+        S --> T["AgenticPatchRegenerationAgent 读取 stderr 并重写补丁"]
+        T --> O
+        R -- "否，尝试耗尽" --> U["ReviewOperator 标记 FAILED"]
+        R -- "是" --> V["ReviewOperator 审查 diff 与测试结果"]
+        V --> W{"Review 通过?"}
+        W -- "否" --> U
+        W -- "是" --> X["GitTools commit 并 push repair/{sessionId}"]
+        X --> Y["GitHub REST API 创建 Pull Request"]
+        Y --> Z["FeishuTools 发送 v2 交互卡片"]
+        U --> Z
+        Z --> AA["AgenticReflectionAgent 输出 RepairReflection"]
+        AA --> AB["RecordOperator 写 JSON/Markdown 修复记录"]
+        AB --> AC["SSE completed：FIXED / FAILED / ERROR"]
+    end
 ```
 
-下一步：
+## 方法流程说明
 
-1. 用一键 Demo 编排对 `quantity-division-by-zero`、`wrong-quote-route`、`wrong-error-status` 各跑 1 次验收，避免重复消耗 token。
-2. 保留 1 条真实 PR + 飞书黄金链路，其它故障可先本地记录 outcome、耗时、token 和测试结果。
-3. 用 Vue 驾驶舱录制正式演示视频，并验证另外两类故障的 PR-safe base branch。
-4. 后续再扩展生产触发源（日志轮询、Sentry、OpenTelemetry、CI 失败）和 RAG/知识库。
+1. 预检演示环境
+   前端调用 `GET /api/demo/pr-scenarios/readiness?faultType=...`，后端检查 LLM、Git、GitHub、Feishu、故障 base branch 和 worktree 根目录。预检只返回布尔状态和 warnings，不返回密钥。
 
-### 前端演示驾驶舱
+2. 创建 PR-safe worktree
+   `POST /api/demo/pr-scenarios/start` 根据 `faultType` 推导 `demo/fault/{faultType}`，执行 `git worktree add -B repair/{sessionId}`，把修复运行隔离到 `REPAIR_WORKTREE_ROOT/{sessionId}`。主工作区继续留在 `main`，避免演示期间污染平台代码。
 
-前端源码在 `frontend/`，采用 Vue 3 + Vite + TypeScript，设计口径是「评委演示驾驶舱」而不是营销页。页面现在拆成 Run、Tool Trace、Artifacts、PR Diff、Judge Evidence 五个视图；Run 用 ChatOps 对话式逐字展示 SSE，Tool Trace 专门展示 `ReadLog`、`ReadCode`、`RunTest`、`GitCommit` 等调用，PR Diff 按 GitHub Files changed 风格展示文件级和行级删改。页面通过同源 `/api` 调用后端，构建产物输出到：
+3. 复现故障并准备证据
+   `quantity-division-by-zero` 通过 HTTP 调用触发 500 traceback；其它测试型故障会运行一次目标测试，并把失败输出写入 `target-service/logs/tracebacks/`。后续 Agent 只需要读最新证据，不依赖旧日志。
 
-```text
-agent-platform/src/main/resources/static/
-```
+4. 诊断与规划
+   `AgenticDiagnosisAgent` 读取证据并返回 `DiagnosisResult`；`AgenticPlanAgent` 返回 `RepairPlan`，包含修复目标、根因假设、候选文件、步骤和测试命令。两个结果都由 Java 校验，不合格时重试一次。
 
-安装和构建：
+5. 生成并应用补丁
+   `AgenticPatchAgent` 根据 `RepairPlan`、源码上下文和历史成功案例 few-shot 输出 `PatchProposal`。`PatchParserOperator` 校验路径、操作、测试列表；`PatchApplyOperator` 先对目标文件做快照，再按 exact oldText/newText 替换。模型不直接写文件。
 
-```powershell
-npm --prefix frontend install
-npm --prefix frontend run build
-```
+6. 测试失败 Reflexion
+   如果测试失败并且未超过 `REPAIR_MAX_PATCH_ATTEMPTS`，系统先回滚本轮补丁，再把测试 stdout/stderr 截断后交给 `AgenticPatchRegenerationAgent` 重写补丁。补丁阶段的 `ReadCode` / `SearchCode` SSE 归类为 `patching`，不会回退污染 `planning` 阶段。
 
-开发调试：
+7. Review Gate
+   `RepairReviewerAgent` 检查补丁是否应用成功、测试是否通过、diff 是否非空、修改路径是否在白名单内。测试失败或路径越界会阻断 commit/PR。
 
-```powershell
-npm --prefix frontend run dev
-```
+8. Commit、PR 与飞书
+   Review 通过后，`GitTools` 只 stage `target-service/src/main` 与 `target-service/src/test`，commit 后 push `repair/{sessionId}`。`GitHubRestPullRequestProvider` 创建 PR；`FeishuTools` 发送包含 outcome、根因、Review 结论、PR URL、耗时和 token usage 的 v2 卡片。失败修复会使用失败文案，不会声称已修复。
 
-开发服务会把 `/api` 代理到 `http://localhost:9901`。比赛演示时构建前端后只需要启动 `agent-platform`，浏览器打开：
+9. 反思与记录
+   `AgenticReflectionAgent` 总结根因、证据、修复策略、测试覆盖和经验。`RecordOperator` 写入 `repair-records/{sessionId}.json` 与 `.md`，前端通过记录 API 展示 Artifacts 和 PR Diff。
 
-```text
-http://localhost:9901/
-```
-
-驾驶舱主流程走 PR-safe scenario：先调用 readiness 预检，启动 `POST /api/demo/pr-scenarios/start`；页面会尝试自动从 worktree 重启 `target-service`，成功后自动确认并连接 SSE。若自动重启失败，页面保留 worktree 路径和手动重启命令，人工重启后点击确认即可继续。修复完成后会读取完整修复记录详情。
-
-### 修复耗时与 token 观测
-
-当前已经在保持完整 Agentic 修复链路的前提下，量化“修复一个 bug 到底花了多久、每个模型步骤花了多少 token”。诊断、计划、补丁、测试、审查、commit、PR、飞书、反思和记录等节点仍然完整执行，观测数据只作为旁路记录。
-
-已实现：
-
-- `RepairTiming` 和 `RepairStepTiming` 记录总耗时、每个步骤开始/结束时间、耗时、成功状态、摘要、模型名称和 token 数。
-- `RepairModelUsage` 汇总每个模型步骤的角色、配置模型、响应模型、调用次数、input tokens、output tokens 和 total tokens。
-- 内部 `RepairTimingCollector` 用 `Instant.now()` 记录展示时间，用 `System.nanoTime()` 计算耗时，避免系统时间跳变影响统计。
-- `AgenticRepairRunner` 对 Java DAG 节点主动计时，不再依赖 LangChain4j listener 是否触发。
-- `ObservedChatModel` 包装每个分角色 `ChatModel`，在模型边界直接记录 `ChatResponse.modelName()` 和 `tokenUsage()`，避免 Agentic 强类型输出路径丢失响应元数据。
-- `RepairAgenticListener` 只发布 Agentic 生命周期和工具调用事件。
-- Agentic 链路对 evidence、diagnosis、plan、patch、test、review、commit、PR、notify、reflect、record 等节点逐个计时。
-- SSE 完成事件的 `details` 增加 `durationMillis`、`stepName` 和 `modelUsage`。
-- `repair-records/{sessionId}.json` 增加 `timing.modelUsage` 字段，`repair-records/{sessionId}.md` 增加 `Timing` 和 `Model Usage` 表格，用于后续报告和性能分析。若 provider 没返回 token usage，usage 行仍可记录模型调用次数，但 token 字段为空；若模型 wrapper 没采到模型 usage，飞书卡片显示“未采集到模型 usage”。
-
-验收方式：
-
-- `mvn -pl agent-platform test`
-- 最新验收：`pr-quantity-002` 已在 `demo/fault/quantity-division-by-zero` 上确认 GitHub PR、飞书卡片、SSE、JSON 记录和 Markdown 记录都显示 `outcome=FIXED`。
-
-## LangChain4j 集成说明
-
-当前是「确定性 Java DAG + LangChain4j AI 子 Agent」单一路径：
-
-```text
-Java DAG (AgenticRepairRunner)
-  ├── EvidenceOperator
-  ├── AgenticDiagnosisAgent  (LangChain4j @Agent，返回 DiagnosisResult)
-  ├── AgenticPlanAgent       (LangChain4j @Agent，返回 RepairPlan)
-  ├── PlanParserOperator
-  ├── SourceContextOperator
-  ├── for attempt in 1..max-patch-attempts:
-  │     ├── AgenticPatchAgent.generate / regenerate (LangChain4j @Agent)
-  │     ├── PatchParserOperator
-  │     ├── PatchApplyOperator (含快照)
-  │     ├── TestOperator
-  │     └── 失败 -> rollback -> 回到 AgenticPatchAgent 重写
-  ├── ReviewOperator
-  ├── CommitOperator
-  ├── PullRequestOperator    (GitHub REST API)
-  ├── NotifyOperator         (飞书 v2 卡片)
-  ├── AgenticReflectionAgent (LangChain4j @Agent，返回 RepairReflection)
-  ├── ReflectOperator
-  └── RecordOperator
-```
-
-关键类：
-
-- `RepairChatModelProvider`：按 `REPAIR_LLM_PROVIDER` 延迟创建 OpenAI 或 DashScope `ChatModel`，并支持 diagnosis/plan/patch/reflection 分角色模型覆盖。
-- `AgenticRepairRunner`：用 Java 顺序调用所有 operator，AI 子 Agent 通过 `AgenticServices.agentBuilder(...)` 直接构造，无 SupervisorAgent。
-- `AgenticDiagnosisAgent`、`AgenticPlanAgent`、`AgenticPatchAgent`、`AgenticReflectionAgent`：直接返回强类型对象，字段使用 LangChain4j `@Description` 描述；Plan/Patch prompt 内置 few-shot 示例；`AgenticPatchAgent.regeneratePatchFromTestFailure` 接收测试 stderr 用于 reflexion 重写。
-- `PatchApplyOperator`：在写文件前为每个目标文件生成 `PatchSnapshot`，便于 reflexion 失败后回滚。
-- `GitHubRestPullRequestProvider` + `GitRepoLocator`：默认走 GitHub REST API 创建 PR，自动从 `git remote get-url origin` 解析 owner/repo。
-- `FeishuTools`：构造飞书 v2 卡片 schema（header / 主文 / 耗时 token block / 查看 PR 按钮 / footer），支持可选签名；成功和失败 outcome 使用不同卡片文案。
-- `PatchTools`：唯一允许写入文件的工具，模型不能直接写文件。应用补丁前会预检所有 operation，`oldText` 必须唯一命中，全部通过后才写文件。
-
-启用 OpenAI LLM：
-
-```powershell
-$env:REPAIR_LLM_ENABLED="true"
-$env:REPAIR_LLM_PROVIDER="openai"
-$env:OPENAI_API_KEY="你的 OpenAI API Key"
-$env:OPENAI_BASE_URL="https://api.openai.com/v1"
-$env:REPAIR_LLM_TIMEOUT_SECONDS="90"
-$env:REPAIR_LLM_MAX_RETRIES="1"
-$env:REPAIR_LLM_MAX_TOKENS="4096"
-$env:REPAIR_LLM_REFLECTION_MODEL=""
-```
-
-模型名和分角色模型覆盖建议放在 `application-local.yml`，不要放在可上传的 `application.yml`。如果使用 OpenAI-compatible 模型（例如 DeepSeek、Qwen 等）时出现 `request timed out`，优先调大 `REPAIR_LLM_TIMEOUT_SECONDS`，并保持 `REPAIR_LLM_MAX_RETRIES` 较小，避免一次修复被多轮重试拖得太久。DAG 路径会对 traceback、源码片段和 SSE 工具事件做截断，防止把完整堆栈和文件内容反复送进模型。复杂故障建议把 `REPAIR_LLM_MAX_TOKENS` 提高到 `4096` 或以上。四个模型角色里，`AgenticPatchAgent` 既要生成补丁也要在 reflexion 中根据 stderr 重写补丁，对精确代码修改和指令遵循能力要求最高，建议优先用更强模型；`AgenticDiagnosisAgent`、`AgenticPlanAgent` 和 `AgenticReflectionAgent` 通常可以先用默认模型，多因子故障再单独升配。
-
-如果 `REPAIR_LLM_ENABLED` 未启用或缺少 API key，`POST /api/repair/run` 会接受请求但在 SSE 中发布 `error` 事件，不会执行旧修复链路。
-
-暂缓内容：
-
-- RAG/Milvus 经验库。
-- Sentry/GitHub Webhook 自动触发。
-- 多语言、多项目泛化。
-
-这些能力作为后续扩展，不影响当前已跑通的比赛主链路。
-
-## 文档维护约定
-
-为了重新打开终端或新开 Codex 会话时能快速恢复上下文，后续凡是发生以下变化，都要同步更新 `README.zh-CN.md`、`README.md` 和 `AGENTS.md`：
-
-- 模块职责、架构边界或安全白名单变化。
-- 启动命令、测试命令、环境变量变化。
-- 演示流程、比赛口径或当前 Agent 能力状态变化。
-- GitHub、飞书、Sentry、LLM、MCP 或其他外部集成方式变化。
-
-## 启动服务
-
-所有命令都建议在项目根目录运行：
-
-```powershell
-cd D:\java_web_project\agent-aiOps
-```
-
-需要开两个终端窗口。
-
-终端 1：启动被修复服务：
-
-```powershell
-mvn -pl target-service spring-boot:run
-```
-
-终端 2：启动 Agent 平台：
-
-```powershell
-mvn -pl agent-platform spring-boot:run
-```
-
-默认端口：
-
-- `target-service`：`http://localhost:9910`
-- `agent-platform`：`http://localhost:9901`
-
-## 触发演示 Bug
-
-这个命令在 **新的 PowerShell 终端** 里运行即可。
-
-运行前需要确保：
-
-- 终端 1 里的 `target-service` 已经启动成功。
-- 能访问 `http://localhost:9910`。
-
-命令本身是 HTTP 请求，所以理论上在哪个目录运行都可以；为了统一，建议仍然先进入项目根目录：
-
-```powershell
-cd D:\java_web_project\agent-aiOps
-```
-
-调用下面的接口用于复现 `quantity=0` 参数校验缺失问题。注意：当前主线代码已经加入校验，因此会返回 400；需要先通过后面的故障注入 API 切到故障态，或手动恢复故障代码，才会产生 `/ by zero` 异常：
-
-```powershell
-Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
-```
-
-目标服务保留普通应用日志，同时把每次未预期 500 异常写成单独 traceback 文件，避免所有报错堆在一个文件里：
-
-```text
-target-service/logs/target-service.log
-target-service/logs/tracebacks/traceback-{timestamp}-{traceId}.log
-```
-
-`agent-platform` 默认读取整个 `target-service/logs` 目录，并从其中选择最新的异常 traceback 作为修复证据。
-
-## 触发自动修复
-
-这个命令也在 **新的 PowerShell 终端** 里运行。
-
-运行前需要确保：
-
-- 终端 1：`target-service` 正在运行。
-- 终端 2：`agent-platform` 正在运行。
-- 已经调用过上面的 Bug 触发接口，或 `target-service/logs` 下已经有异常 traceback 文件。
-
-```powershell
-$body = @{ sessionId = "demo-001" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/repair/run" -ContentType "application/json" -Body $body
-```
-
-查看 SSE 流式事件：
-
-```text
-GET http://localhost:9901/api/repair/stream/demo-001
-```
-
-事件阶段包括：
-
-```text
-detecting
-planning
-executing
-patching
-testing
-reviewing
-committing
-pr_created
-notified
-reflecting
-completed
-error
-```
-
-## 演示故障注入
-
-`agent-platform` 提供本地演示故障 API，用于把当前已修复的 `target-service` 自动切到故障态。该能力只写入 `target-service/src/main` 下固定演示文件，方便后续选择不同故障类型再让 Agent 修复。
-
-列出可用故障：
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:9901/api/demo/faults"
-```
-
-当前支持：
-
-- `quantity-division-by-zero`：移除 `OrderService` 的 quantity 校验，`quantity=0` 会触发 `/ by zero`。
-- `wrong-quote-route`：把 `/api/orders/quote` 改成错误路由，Controller 测试会 404。
-- `wrong-error-status`：把参数校验异常错误映射成 500，Controller 测试会失败。
-
-注入一个故障：
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
-```
-
-验证故障：
-
-```powershell
-mvn -pl target-service test
-```
-
-故障注入和恢复只改源码，不会热更新正在运行的 `target-service`。如果要通过 HTTP 触发运行时异常，需要重启 `target-service` 后再请求：
-
-```powershell
-Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
-```
-
-恢复修复态：
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
-```
-
-## 一键 Demo 编排
-
-`agent-platform` 还提供一组 scenario API，用于把“选择故障 -> 注入源码 -> 人工重启确认 -> 准备证据 -> 启动 Agent 修复 -> SSE 追踪 -> 修复记录索引”串成比赛演示流程。第一版仍保留源码级故障注入，所以注入后需要人工重启 `target-service`。
-
-注意：源码注入型 scenario 会制造本地 dirty working tree，因此要求 `REPAIR_GIT_ENABLED=false`。它适合验证 Agent 修复、测试、记录和飞书本地演示；真实 GitHub PR 演示应使用已提交的 `demo/fault/...` base 分支和下面的 PR-safe scenario API。
-
-启动一个场景：
-
-```powershell
-$body = @{ sessionId = "scenario-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/start" -ContentType "application/json" -Body $body
-```
-
-返回 `stage=WAITING_FOR_TARGET_RESTART` 后，重启终端 1 里的 `target-service`，然后确认继续：
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001/confirm-target-restarted"
-```
-
-确认后，scenario API 会：
-
-- `quantity-division-by-zero`：调用 `TARGET_SERVICE_BASE_URL/api/orders/quote?totalCents=100&quantity=0`，期望产生 HTTP 500 和独立 traceback 文件。
-- `wrong-quote-route` / `wrong-error-status`：运行一次 `target-service` 测试，并把失败输出写成最新证据日志，避免旧 traceback 干扰 Agent 诊断。
-- 调用 `POST /api/repair/run` 启动修复，并返回 `repairStreamUrl`。
-
-查看场景状态：
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:9901/api/demo/scenarios/scenario-quantity-001"
-```
-
-查看 SSE：
-
-```text
-GET http://localhost:9901/api/repair/stream/scenario-quantity-001
-```
-
-### 一键 Demo + PR
-
-如果要“一键 Demo + 创建 GitHub PR”，使用 PR-safe scenario API。它不会临时注入当前工作区源码，而是要求故障已经提交在对应 base 分支上：
+## 支持的故障类型
 
 ```text
 quantity-division-by-zero -> demo/fault/quantity-division-by-zero
 wrong-quote-route         -> demo/fault/wrong-quote-route
 wrong-error-status        -> demo/fault/wrong-error-status
+precision-loss            -> demo/fault/precision-loss
+race-condition            -> demo/fault/race-condition
+path-traversal            -> demo/fault/path-traversal
 ```
 
-运行前要求：
+含义：
 
-- `REPAIR_GIT_ENABLED=true`
-- `REPAIR_GITHUB_ENABLED=true`
-- `REPAIR_BASE_BRANCH` 必须等于当前故障类型对应的 `demo/fault/{faultType}`。
-- `REPAIR_WORKTREE_ROOT` 指向主仓库外部目录。
-- 对应的 `demo/fault/{faultType}` 分支必须已经存在于本地或远端，并且只包含这一个故障。
+- `quantity-division-by-zero`：`quantity=0` 导致 `/ by zero`。
+- `wrong-quote-route`：报价接口路径漂移，`GET /api/orders/quote` 返回 404。
+- `wrong-error-status`：参数校验错误被错误映射成 HTTP 500，而不是 400。
+- `precision-loss`：折扣计算使用 `double` 中间值，产生浮点精度误差。
+- `race-condition`：库存扣减缺少同步保护，并发请求导致结果不稳定。
+- `path-traversal`：文件下载未校验 `../` 路径，可能读取目录外文件。
 
-以除零故障为例：
+每个 `demo/fault/...` 分支应只包含一个故障，避免 Agent 修复 A 故障后被 B 故障的测试拦截。
+
+## 运行方式
+
+所有命令从仓库根目录运行：
 
 ```powershell
+cd D:\java_web_project\agent-aiOps
+```
+
+启动目标服务：
+
+```powershell
+mvn -pl target-service spring-boot:run
+```
+
+启动 Agent 平台：
+
+```powershell
+mvn -pl agent-platform spring-boot:run
+```
+
+构建并托管前端：
+
+```powershell
+npm --prefix frontend install
+npm --prefix frontend run build
+mvn -pl agent-platform spring-boot:run
+```
+
+打开：
+
+```text
+http://localhost:9901/
+```
+
+前端开发服务：
+
+```powershell
+npm --prefix frontend run dev
+```
+
+## PR-safe 演示命令
+
+开启真实 PR 演示所需环境变量：
+
+```powershell
+$env:REPAIR_LLM_ENABLED="true"
 $env:REPAIR_GIT_ENABLED="true"
 $env:REPAIR_GITHUB_ENABLED="true"
-$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
-
-$body = @{ sessionId = "pr-quantity-001"; faultType = "quantity-division-by-zero" } | ConvertTo-Json
-$scenario = Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
+$env:REPAIR_GITHUB_CLIENT="rest"
+$env:GITHUB_TOKEN="your GitHub token"
+$env:FEISHU_ENABLED="true"
+$env:FEISHU_WEBHOOK_URL="your Feishu webhook"
+$env:FEISHU_SIGNING_SECRET="optional signing secret"
+$env:REPAIR_WORKTREE_ROOT="../agent-aiOps-worktrees"
 ```
 
-Vue 驾驶舱会自动调用重启接口；命令行手动等价调用如下：
+启动一个 PR-safe 场景：
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/restart-target-service"
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+$body = @{ sessionId = "pr-precision-001"; faultType = "precision-loss" } | ConvertTo-Json
+$scenario = Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:9901/api/demo/pr-scenarios/start" `
+  -ContentType "application/json" `
+  -Body $body
 ```
 
-如果自动重启失败，再从返回的 `$scenario.worktreePath` 目录手动重启 `target-service`：
+自动重启 target-service：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-precision-001/restart-target-service"
+```
+
+确认故障服务已重启并启动修复：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-precision-001/confirm-target-restarted"
+```
+
+查看 SSE：
+
+```powershell
+curl.exe -N "http://localhost:9901/api/repair/stream/pr-precision-001"
+```
+
+如果自动重启失败，从返回的 worktree 手动启动：
 
 ```powershell
 Push-Location $scenario.worktreePath
 mvn -pl target-service spring-boot:run
 ```
 
-手动重启后再确认：
+## 本地故障注入
+
+源码注入型 API 会修改当前工作区的 `target-service/src/main`，因此只用于本地调试；真实 PR 演示使用 PR-safe API。
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/pr-quantity-001/confirm-target-restarted"
+Invoke-RestMethod -Uri "http://localhost:9901/api/demo/faults"
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
+Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/reset"
 ```
 
-在另一个终端查看 SSE：
+注入或 reset 后需要重启 `target-service`，Java 源码变更不会热加载。
 
-```powershell
-curl.exe -N "http://localhost:9901/api/repair/stream/pr-quantity-001"
+## 主要 API
+
+```text
+POST /api/repair/run
+GET  /api/repair/stream/{sessionId}
+GET  /api/repair/records
+GET  /api/repair/records/{sessionId}
+
+GET  /api/demo/faults
+POST /api/demo/faults/{faultType}/inject
+POST /api/demo/faults/reset
+
+POST /api/demo/scenarios/start
+GET  /api/demo/scenarios/{sessionId}
+POST /api/demo/scenarios/{sessionId}/confirm-target-restarted
+
+GET  /api/demo/pr-scenarios/readiness?faultType=...
+POST /api/demo/pr-scenarios/start
+GET  /api/demo/pr-scenarios/{sessionId}
+POST /api/demo/pr-scenarios/{sessionId}/restart-target-service
+POST /api/demo/pr-scenarios/{sessionId}/confirm-target-restarted
 ```
-
-成功完成时应看到 `outcome=FIXED`、`repair/pr-quantity-001` 已 push、GitHub PR URL、飞书成功卡片，以及 `repair-records/pr-quantity-001.json` / `.md`。
-
-另外两个故障不要用同一个 base 分支混跑。先准备对应故障分支，再改 `REPAIR_BASE_BRANCH` 并重启 `agent-platform`：
-
-```powershell
-# 路由故障
-$env:REPAIR_BASE_BRANCH="demo/fault/wrong-quote-route"
-$body = @{ sessionId = "pr-route-001"; faultType = "wrong-quote-route" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
-
-# 状态码故障
-$env:REPAIR_BASE_BRANCH="demo/fault/wrong-error-status"
-$body = @{ sessionId = "pr-status-001"; faultType = "wrong-error-status" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/pr-scenarios/start" -ContentType "application/json" -Body $body
-```
-
-如果 `demo/fault/wrong-quote-route` 或 `demo/fault/wrong-error-status` 还不存在，需要先从当前 `main` 创建并提交对应单一故障；否则 PR-safe scenario 会拒绝启动或 fetch/checkout 失败。
 
 ## 环境变量
 
 ```text
+REPAIR_WORKSPACE_ROOT=${user.dir}
+REPAIR_TARGET_ROOT=target-service
+REPAIR_TARGET_LOG=target-service/logs
+REPAIR_TEST_COMMAND=mvn -pl target-service test
+TARGET_SERVICE_BASE_URL=http://localhost:9910
+
 REPAIR_LLM_ENABLED=false
 REPAIR_LLM_PROVIDER=openai
 REPAIR_LLM_TEMPERATURE=0.1
@@ -498,18 +292,15 @@ REPAIR_LLM_MAX_TOKENS=4096
 REPAIR_LLM_TIMEOUT_SECONDS=180
 REPAIR_LLM_MAX_RETRIES=1
 REPAIR_LLM_REFLECTION_MODEL=
-REPAIR_MAX_PATCH_ATTEMPTS=2
-
-REPAIR_TARGET_LOG=target-service/logs
-TARGET_SERVICE_BASE_URL=http://localhost:9910
-TARGET_SERVICE_LOG_FILE=logs/target-service.log
-TARGET_SERVICE_TRACEBACK_LOG_DIR=logs/tracebacks
-
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
-
 DASHSCOPE_API_KEY=
 DASHSCOPE_BASE_URL=
+
+REPAIR_MAX_ATTEMPTS=3
+REPAIR_MAX_PATCH_ATTEMPTS=2
+REPAIR_PROCESS_TIMEOUT_SECONDS=120
+REPAIR_AGENTIC_FILE_READ_CACHE_ENABLED=true
 
 REPAIR_GIT_ENABLED=false
 REPAIR_GIT_REMOTE=origin
@@ -518,201 +309,84 @@ REPAIR_WORKTREE_ROOT=../agent-aiOps-worktrees
 
 REPAIR_GITHUB_ENABLED=false
 REPAIR_GITHUB_CLIENT=rest
+GITHUB_TOKEN=
 REPAIR_GITHUB_OWNER=
 REPAIR_GITHUB_REPO=
 REPAIR_GITHUB_API_BASE_URL=https://api.github.com
-GITHUB_TOKEN=
 
 FEISHU_ENABLED=false
 FEISHU_WEBHOOK_URL=
 FEISHU_SIGNING_SECRET=
+
+REPAIR_MONITOR_ENABLED=false
+REPAIR_MONITOR_POLL_INTERVAL_SECONDS=30
 ```
 
-## 本地配置文件
-
-上传到 GitHub 的配置使用：
-
-```text
-agent-platform/src/main/resources/application.yml
-```
-
-本地真实运行使用：
+本地密钥和模型选择放在 gitignored 文件：
 
 ```text
 agent-platform/src/main/resources/application-local.yml
 ```
 
-`application-local.yml` 已加入 `.gitignore`，可以在里面填写真实 key 和本地模型选择，不要上传。`application.yml` 默认 include `local` profile，并通过 `optional:classpath:application-local.yml` 自动导入它，因此正常启动命令就会读取本地配置。当前可上传的 `application.yml` 不再选择 OpenAI/DashScope 默认模型，也不再写 diagnosis/plan/patch/reflection 分角色模型覆盖：
+`application.yml` 会自动 import `optional:classpath:application-local.yml`。不要把真实 key、Webhook 或本地模型配置提交到 Git。
 
-```powershell
-cd D:\java_web_project\agent-aiOps
-mvn -pl agent-platform spring-boot:run
-```
+## 验证
 
-如果使用 OpenAI-compatible 本地或演示 provider，`application-local.yml` 中保持：
-
-```yaml
-openai:
-  api-key: "你的 key"
-  model: deepseek-v4-flash
-  base-url: "你的 OpenAI-compatible /v1 endpoint"
-
-repair:
-  llm:
-    enabled: true
-    provider: openai
-    patch-model: deepseek-v4-flash
-    reflection-model: deepseek-v4-flash
-```
-
-隐私注意：
-
-- 不要把真实 `OPENAI_API_KEY`、`DASHSCOPE_API_KEY`、`FEISHU_WEBHOOK_URL` 写入 README 或提交到 Git。
-- 建议只在 PowerShell 环境变量里配置 key。
-- `.gitignore` 已忽略 `.env`、`.env.*`、`*.secret`、`local-secrets/`、`local-reports/`。
-- `agent-platform/src/main/resources/application.yml` 当前只保留上传安全的通用默认值，不应写入真实 key 或本地模型选择。
-
-说明：
-
-- `REPAIR_GIT_ENABLED=false` 时，不会创建分支、commit 或 push。
-- `REPAIR_GITHUB_ENABLED=false` 时，不会调用 GitHub API 创建 PR。
-- `FEISHU_ENABLED=false` 时，不会发送飞书卡片。
-- 默认 base 分支是 `demo/fault/quantity-division-by-zero`：这条分支应从当前 `main` 创建，只提交一个除零故障。每次真实 PR 演示都会从这条分支在 `REPAIR_WORKTREE_ROOT/{sessionId}` 创建 `repair/{sessionId}` worktree 并向 base 发起 PR，避免直接对抗 `main`，也避免修回 `main` 后没有 diff。
-- `REPAIR_WORKTREE_ROOT` 必须指向主仓库外部目录；默认是 `../agent-aiOps-worktrees`。
-- 开启真实 PR 时，默认 `REPAIR_GITHUB_CLIENT=rest`，不需要安装 `gh CLI`；如需走 CLI，可设 `REPAIR_GITHUB_CLIENT=cli`。`GITHUB_TOKEN` 如果使用 fine-grained personal access token，Repository access 必须包含 `deibudei/agent-aiOps`，Repository permissions 至少需要 `Contents: Read and write` 和 `Pull requests: Read and write`。只有 PR/code 读权限会在创建 PR 时返回 GitHub HTTP 403。
-- `REPAIR_GITHUB_OWNER` / `REPAIR_GITHUB_REPO` 留空时，会从 `git remote get-url origin` 自动解析。
-- 飞书 v2 卡片可选签名校验：在群机器人开启签名校验后填 `FEISHU_SIGNING_SECRET` 即可。
-- `REPAIR_MAX_PATCH_ATTEMPTS=2` 表示：第一版补丁测试失败时，最多再让 Patch Agent 根据 stderr 重写 1 次；提高数值会更稳但更慢更费 token。
-
-## 测试命令
-
-Agent 平台测试：
+后端：
 
 ```powershell
 mvn -pl agent-platform test
 ```
 
-被修复服务测试：
+目标服务：
 
 ```powershell
 mvn -pl target-service test
 ```
 
-注意：当前主线 `target-service` 已处于修复后状态，测试应通过。演示故障态优先使用 `agent-platform` 的故障注入 API。
-
-如果只想确认 `target-service` 能编译打包，可以跳过测试：
+前端：
 
 ```powershell
-mvn -pl target-service -DskipTests package
+npm --prefix frontend run build
 ```
+
+当前 `main` 的 `target-service` 应处于修复态，测试应通过。若故障注入后测试失败，先 reset 故障并重启目标服务。
 
 ## 修复记录
 
-每次自动修复都会生成记录：
+每次修复会写入：
 
 ```text
 repair-records/{sessionId}.json
 repair-records/{sessionId}.md
 ```
 
-如果记录出现在下面这个目录，说明 `agent-platform` 仍在运行旧进程，或者工作区根目录没有正确识别：
-
-```text
-agent-platform/repair-records/
-```
-
-处理方式：在终端 2 按 `Ctrl+C` 停止 `agent-platform`，然后从项目根目录重新启动：
-
-```powershell
-cd D:\java_web_project\agent-aiOps
-mvn -pl agent-platform spring-boot:run
-```
-
 记录内容包括：
 
-- 异常摘要
-- 证据摘要
-- 修复计划
-- 工具执行步骤
-- LLM 补丁 proposal 和落盘结果
-- diff 摘要
-- 测试结果
-- Review 结论
-- PR 结果
-- 飞书通知结果
-- Agent 反思沉淀
+- traceback / 测试失败证据
+- 诊断结果和修复计划
+- PatchProposal 与实际 diff
+- 测试结果、Review 结论、Git/PR/飞书结果
+- 总耗时、每步耗时、模型 token usage
+- 反思沉淀和未来提示
 
-修复记录索引 API：
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records"
-Invoke-RestMethod -Uri "http://localhost:9901/api/repair/records/pr-quantity-001"
-```
-
-索引会读取 repo-root `repair-records/*.json`，返回 `sessionId`、`outcome`、`durationMillis`、`patchAttempts`、`totalTokens`、`testSuccess`、`prUrl` 和 `notificationSuccess` 等摘要字段。详情接口返回完整 `RepairRecord`，是前端展示根因、计划、补丁、测试、PR、飞书和反思的读取入口。
-
-## 新终端快速恢复上下文
-
-如果以后重新打开终端或重新开始对话，先看这两个文件：
-
-```text
-README.zh-CN.md
-AGENTS.md
-```
-
-最短操作顺序：
-
-```powershell
-cd D:\java_web_project\agent-aiOps
-
-# 终端 1
-mvn -pl target-service spring-boot:run
-
-# 终端 2
-mvn -pl agent-platform spring-boot:run
-
-# 终端 3：注入故障
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/demo/faults/quantity-division-by-zero/inject"
-
-# 重启终端 1 的 target-service，让源码故障生效
-
-# 终端 3：触发 bug
-Invoke-WebRequest "http://localhost:9910/api/orders/quote?totalCents=100&quantity=0"
-
-# 终端 3：触发修复
-$body = @{ sessionId = "demo-001" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:9901/api/repair/run" -ContentType "application/json" -Body $body
-```
-
-真实 PR + 飞书演示需要开启这些环境变量：
-
-```powershell
-$env:REPAIR_GIT_ENABLED="true"
-$env:REPAIR_GITHUB_ENABLED="true"
-$env:REPAIR_GITHUB_CLIENT="rest"
-$env:GITHUB_TOKEN="你的 GitHub fine-grained token"
-$env:REPAIR_BASE_BRANCH="demo/fault/quantity-division-by-zero"
-$env:FEISHU_ENABLED="true"
-$env:FEISHU_WEBHOOK_URL="你的飞书 webhook"
-$env:FEISHU_SIGNING_SECRET="飞书机器人签名密钥（如启用）"
-```
+如果记录出现在 `agent-platform/repair-records/`，说明 `agent-platform` 没有从仓库根目录启动或仍在运行旧进程。停止后从仓库根目录重启即可。
 
 ## 安全边界
 
-自动修复工具采用强白名单：
+- AI 子 Agent 只有 read-only 工具，不能直接写文件。
+- 写入只能通过 `PatchTools + ToolPolicy`。
+- Patch oldText 必须唯一命中，全部 operation 预检通过后才落盘。
+- 修改路径限制在 `target-service/src/main` 和 `target-service/src/test`。
+- Commit 只 stage 源码/测试目录，避免提交测试运行时文件。
+- GitHub、Feishu、LLM、Monitor 默认关闭。
 
-- 只读取 `target-service/src` 和 `target-service/logs`
-- 只允许修改 `target-service/src/main` 和 `target-service/src/test`
-- 不允许修改 `agent-platform`
-- 不允许修改根配置、密钥配置或任意脚本
-- 测试命令固定为目标服务测试
+## 文档维护
 
-## 扩展点
+当模块职责、环境变量、启动命令、演示流程、Git 分支模型或外部集成方式变化时，同步更新：
 
-当前代码已预留：
-
-- `RepairTrigger`：后续可扩展日志轮询、GitHub Webhook、CI 失败触发。
-- `TestRunner`：后续可扩展 Gradle、pytest、npm test。
-- `PullRequestProvider`：默认实现 `GitHubRestPullRequestProvider`，后续可加 GitLab/Gitee 等 provider。
-- `ReviewPolicy`：后续可拆分安全审查、回归风险审查、测试覆盖审查。
-- `RepairRecord`：后续可接入 RAG/Milvus，沉淀历史修复经验。
+```text
+README.zh-CN.md
+README.md
+AGENTS.md
+```

@@ -63,13 +63,18 @@ public class RepairWorkflowService {
 
     /** Accepts an API request and runs the repair workflow in an isolated workspace. */
     public RepairRunResponse startAsync(String requestedSessionId, String workspaceRoot) {
+        return startAsync(requestedSessionId, workspaceRoot, null);
+    }
+
+    /** Accepts an API request and runs the repair workflow in an isolated workspace with a PR base branch. */
+    public RepairRunResponse startAsync(String requestedSessionId, String workspaceRoot, String baseBranch) {
         String sessionId = requestedSessionId == null || requestedSessionId.isBlank()
                 ? UUID.randomUUID().toString()
                 : validateSessionId(requestedSessionId);
         Path activeWorkspace = validateWorkspaceRoot(workspaceRoot);
         eventHub.publish(sessionId, RepairStage.DETECTING, "Repair workflow accepted",
                 Map.of("workspaceRoot", activeWorkspace.toString()));
-        repairTaskExecutor.execute(() -> workspaceContext.runWithWorkspace(activeWorkspace, () -> run(sessionId)));
+        repairTaskExecutor.execute(() -> workspaceContext.runWithWorkspace(activeWorkspace, baseBranch, () -> run(sessionId)));
         return new RepairRunResponse(sessionId, "started", "/api/repair/stream/" + sessionId);
     }
 

@@ -22,7 +22,10 @@ local-secrets/
 agent-platform/src/main/resources/application-local.yml
 target-service/src/main/resources/application-local.yml
 target-service/logs/
+target-service/files/
+target-service/target-service/
 agent-platform/logs/
 
 # Local-only progress reports and private notes
 local-reports/
+.fault-verify/

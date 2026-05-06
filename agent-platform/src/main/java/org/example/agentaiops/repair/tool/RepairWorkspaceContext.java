@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 public class RepairWorkspaceContext {
 
     private final ThreadLocal<Path> activeWorkspaceRoot = new ThreadLocal<>();
+    private final ThreadLocal<String> activeBaseBranch = new ThreadLocal<>();
 
     /** Returns the active workspace root for the current thread, if one is set. */
     public Optional<Path> activeWorkspaceRoot() {
@@ -17,9 +18,20 @@ public class RepairWorkspaceContext {
         return value == null ? Optional.empty() : Optional.of(value);
     }
 
+    /** Returns the PR base branch associated with the current repair workspace, if one is set. */
+    public Optional<String> activeBaseBranch() {
+        String value = activeBaseBranch.get();
+        return value == null || value.isBlank() ? Optional.empty() : Optional.of(value);
+    }
+
     /** Runs an action with a temporary active workspace root. */
     public void runWithWorkspace(Path workspaceRoot, Runnable action) {
-        callWithWorkspace(workspaceRoot, () -> {
+        runWithWorkspace(workspaceRoot, null, action);
+    }
+
+    /** Runs an action with a temporary active workspace root and PR base branch. */
+    public void runWithWorkspace(Path workspaceRoot, String baseBranch, Runnable action) {
+        callWithWorkspace(workspaceRoot, baseBranch, () -> {
             action.run();
             return null;
         });
@@ -27,8 +39,17 @@ public class RepairWorkspaceContext {
 
     /** Calls an action with a temporary active workspace root. */
     public <T> T callWithWorkspace(Path workspaceRoot, Supplier<T> action) {
+        return callWithWorkspace(workspaceRoot, null, action);
+    }
+
+    /** Calls an action with a temporary active workspace root and optional PR base branch. */
+    public <T> T callWithWorkspace(Path workspaceRoot, String baseBranch, Supplier<T> action) {
         Path previous = activeWorkspaceRoot.get();
+        String previousBaseBranch = activeBaseBranch.get();
         activeWorkspaceRoot.set(workspaceRoot.toAbsolutePath().normalize());
+        if (baseBranch != null && !baseBranch.isBlank()) {
+            activeBaseBranch.set(baseBranch);
+        }
         try {
             return action.get();
         } finally {
@@ -36,6 +57,11 @@ public class RepairWorkspaceContext {
                 activeWorkspaceRoot.remove();
             } else {
                 activeWorkspaceRoot.set(previous);
+            }
+            if (previousBaseBranch == null) {
+                activeBaseBranch.remove();
+            } else {
+                activeBaseBranch.set(previousBaseBranch);
             }
         }
     }

@@ -232,17 +232,9 @@ public class DemoScenarioService {
                     HttpStatus.CONFLICT,
                     "PR demo scenarios require REPAIR_GIT_ENABLED=true and REPAIR_GITHUB_ENABLED=true");
         }
-        String expectedBaseBranch = "demo/fault/" + type.wireName();
-        String configuredBaseBranch = properties.getGit().getBaseBranch();
-        if (!expectedBaseBranch.equals(configuredBaseBranch)) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Set REPAIR_BASE_BRANCH=" + expectedBaseBranch
-                            + " before starting this PR demo scenario. Current base branch is "
-                            + configuredBaseBranch);
-        }
+        String baseBranch = "demo/fault/" + type.wireName();
 
-        RepairWorktreeResult prepared = gitTools.prepareRepairWorktreeFromBase(sessionId);
+        RepairWorktreeResult prepared = gitTools.prepareRepairWorktreeFromBase(sessionId, baseBranch);
         if (!prepared.success()) {
             DemoScenarioResult failed = new DemoScenarioResult(
                     sessionId,
@@ -253,7 +245,7 @@ public class DemoScenarioService {
                     List.of(),
                     List.of(
                             "Use a new sessionId if this worktree already exists.",
-                            "Ensure " + configuredBaseBranch + " exists locally or on the configured remote."),
+                            "Ensure " + baseBranch + " exists locally or on the configured remote."),
                     null,
                     targetServiceBaseUrl(),
                     "",
@@ -274,14 +266,14 @@ public class DemoScenarioService {
                 DemoScenarioStage.WAITING_FOR_TARGET_RESTART,
                 true,
                 "Prepared " + prepared.branchName()
-                        + " from " + configuredBaseBranch
+                        + " from " + baseBranch
                         + " in " + prepared.worktreePath()
                         + ". Restart target-service from that worktree, then confirm the scenario.",
                 List.of(),
                 waitingPullRequestNextSteps(sessionId, prepared.worktreePath()),
                 null,
                 targetServiceBaseUrl(),
-                "branch=" + prepared.branchName() + ", base=" + configuredBaseBranch,
+                "branch=" + prepared.branchName() + ", base=" + baseBranch,
                 prepared.branchName(),
                 prepared.worktreePath(),
                 "",
@@ -297,8 +289,7 @@ public class DemoScenarioService {
     public DemoPrScenarioReadiness pullRequestReadiness(String faultType) {
         DemoFaultType type = parseFaultType(faultType);
         String expectedBaseBranch = "demo/fault/" + type.wireName();
-        String configuredBaseBranch = properties.getGit().getBaseBranch();
-        boolean baseBranchMatches = expectedBaseBranch.equals(configuredBaseBranch);
+        boolean baseBranchMatches = gitTools.baseBranchExists(expectedBaseBranch);
         boolean llmEnabled = properties.getLlm().isEnabled();
         boolean gitEnabled = properties.getGit().isEnabled();
         boolean githubEnabled = properties.getGithub().isEnabled();
@@ -325,8 +316,8 @@ public class DemoScenarioService {
             warnings.add("FEISHU_WEBHOOK_URL is empty; Feishu notification will fail.");
         }
         if (!baseBranchMatches) {
-            warnings.add("Set REPAIR_BASE_BRANCH=" + expectedBaseBranch
-                    + " for the selected fault. Current value is " + configuredBaseBranch + ".");
+            warnings.add("Create and push " + expectedBaseBranch
+                    + " before starting this PR demo scenario.");
         }
         if (!hasText(worktreeRoot)) {
             warnings.add("Set REPAIR_WORKTREE_ROOT to a directory outside the main checkout.");
@@ -335,7 +326,7 @@ public class DemoScenarioService {
         return new DemoPrScenarioReadiness(
                 type.wireName(),
                 expectedBaseBranch,
-                configuredBaseBranch,
+                expectedBaseBranch,
                 baseBranchMatches,
                 llmEnabled,
                 gitEnabled,
@@ -365,6 +356,7 @@ public class DemoScenarioService {
 
     private DemoScenarioResult confirmPullRequestInWorkspace(String safeSessionId, DemoScenarioResult current) {
         DemoFaultType type = parseFaultType(current.faultType());
+        String baseBranch = "demo/fault/" + type.wireName();
         ScenarioEvidence evidence = prepareEvidence(safeSessionId, type);
         if (!evidence.success()) {
             DemoScenarioResult failed = copy(
@@ -379,7 +371,7 @@ public class DemoScenarioService {
             return failed;
         }
 
-        RepairRunResponse repair = repairWorkflowService.startAsync(safeSessionId, current.worktreePath());
+        RepairRunResponse repair = repairWorkflowService.startAsync(safeSessionId, current.worktreePath(), baseBranch);
         DemoScenarioResult started = copy(
                 current,
                 DemoScenarioStage.RUNNING,
@@ -398,7 +390,9 @@ public class DemoScenarioService {
     private ScenarioEvidence prepareEvidence(String sessionId, DemoFaultType type) {
         return switch (type) {
             case QUANTITY_DIVISION_BY_ZERO -> triggerQuantityRuntimeFailure();
-            case WRONG_QUOTE_ROUTE, WRONG_ERROR_STATUS -> writeLatestTestFailureEvidence(sessionId, type);
+            case WRONG_QUOTE_ROUTE, WRONG_ERROR_STATUS,
+                 PRECISION_LOSS, RACE_CONDITION, PATH_TRAVERSAL ->
+                    writeLatestTestFailureEvidence(sessionId, type);
         };
     }
 
@@ -507,6 +501,9 @@ public class DemoScenarioService {
             case WRONG_QUOTE_ROUTE -> "GET /api/orders/quote returned 404 because OrderController mapping drifted";
             case WRONG_ERROR_STATUS -> "quantity validation returned HTTP 500 instead of HTTP 400 in GlobalExceptionHandler";
             case QUANTITY_DIVISION_BY_ZERO -> "quantity=0 triggered ArithmeticException";
+            case PRECISION_LOSS -> "calculateDiscountPrice produced 199.96000000000004 instead of 199.96 due to double precision loss";
+            case RACE_CONDITION -> "concurrent inventory deductions over-sold stock (expected 0, got >0)";
+            case PATH_TRAVERSAL -> "path traversal via '../' returned HTTP 500 instead of HTTP 4xx";
         };
     }
 
@@ -518,6 +515,12 @@ public class DemoScenarioService {
                     "\tat com.example.targetservice.web.GlobalExceptionHandler.handleIllegalArgument(GlobalExceptionHandler.java:24)";
             case QUANTITY_DIVISION_BY_ZERO ->
                     "\tat com.example.targetservice.service.OrderService.calculateUnitPrice(OrderService.java:10)";
+            case PRECISION_LOSS ->
+                    "\tat com.example.targetservice.service.OrderService.calculateDiscountPrice(OrderService.java:36)";
+            case RACE_CONDITION ->
+                    "\tat com.example.targetservice.service.InventoryService.deduct(InventoryService.java:22)";
+            case PATH_TRAVERSAL ->
+                    "\tat com.example.targetservice.service.FileStorageService.readFile(FileStorageService.java:22)";
         };
     }
 

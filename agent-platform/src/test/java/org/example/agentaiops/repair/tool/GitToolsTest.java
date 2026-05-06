@@ -96,4 +96,48 @@ class GitToolsTest {
                 argThat(command -> command.contains("worktree") && command.contains("add")),
                 any());
     }
+
+    @Test
+    void commitStagesOnlyTargetSourceAndTestRoots() throws Exception {
+        Files.createFile(tempDir.resolve("pom.xml"));
+        Files.createDirectories(tempDir.resolve("agent-platform"));
+        Files.createFile(tempDir.resolve("agent-platform/pom.xml"));
+        Files.createDirectories(tempDir.resolve("target-service/src/main"));
+        Files.createDirectories(tempDir.resolve("target-service/src/test"));
+        Files.createFile(tempDir.resolve("target-service/pom.xml"));
+        RepairProperties properties = new RepairProperties();
+        properties.setWorkspaceRoot(tempDir.toString());
+        properties.getGit().setEnabled(true);
+        CommandRunner runner = mock(CommandRunner.class);
+        when(runner.run(eq(tempDir.toAbsolutePath().normalize()), any(), any()))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<String> command = invocation.getArgument(1);
+                    if (command.equals(java.util.List.of("git", "branch", "--show-current"))) {
+                        return new CommandResult(0, "repair/session-001", 1, false);
+                    }
+                    if (command.equals(java.util.List.of(
+                            "git", "diff", "--cached", "--name-only", "--", "target-service"))) {
+                        return new CommandResult(
+                                0,
+                                "target-service/src/main/java/com/example/targetservice/service/OrderService.java",
+                                1,
+                                false);
+                    }
+                    return new CommandResult(0, "ok", 1, false);
+                });
+
+        GitTools tools = new GitTools(properties, new ToolPolicy(properties), runner);
+
+        assertThat(tools.commitAndPush("session-001", "precision fix").success()).isTrue();
+        verify(runner).run(
+                eq(tempDir.toAbsolutePath().normalize()),
+                argThat(command -> command.equals(java.util.List.of(
+                        "git",
+                        "add",
+                        "--",
+                        "target-service/src/main",
+                        "target-service/src/test"))),
+                any());
+    }
 }

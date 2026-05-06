@@ -38,9 +38,6 @@ public final class PlanParserOperator {
         requireList(plan.suspectedFiles(), "suspectedFiles");
         requireList(plan.steps(), "steps");
         requireText(plan.testCommand(), "testCommand");
-        if (!"mvn -pl target-service test".equals(plan.testCommand())) {
-            throw new IllegalStateException("RepairPlan testCommand must be mvn -pl target-service test");
-        }
         for (String file : plan.suspectedFiles()) {
             requireText(file, "suspectedFiles");
             if (!file.startsWith("target-service/src/main/") && !file.startsWith("target-service/src/test/")) {

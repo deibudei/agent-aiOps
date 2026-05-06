@@ -1,7 +1,10 @@
 export type FaultType =
   | 'quantity-division-by-zero'
   | 'wrong-quote-route'
-  | 'wrong-error-status';
+  | 'wrong-error-status'
+  | 'precision-loss'
+  | 'race-condition'
+  | 'path-traversal';
 
 export type DemoScenarioStage =
   | 'CREATED'

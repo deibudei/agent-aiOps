@@ -26,6 +26,7 @@ public interface AgenticPatchAgent {
             - Do not invent files or modify agent-platform, root configs, secrets, scripts, or build files.
             - Human-facing fields repairTarget, rootCause, and operations[].reason must be concise Simplified Chinese.
             - Keep oldText and newText as exact source code text; do not translate code, comments, strings, paths, or commands.
+            - Escape line breaks inside JSON string fields as \\n; never put raw line breaks inside oldText or newText JSON strings.
             - Return only the structured PatchProposal object; no markdown, comments, or prose.
 
             PatchProposal shape:
@@ -89,15 +90,20 @@ public interface AgenticPatchAgent {
             }
             """)
     @UserMessage("""
+            Dynamic few-shot examples from past successful repairs:
+            {{fewShots}}
+
             Repair plan:
             {{plan}}
 
             Source context:
             {{sourceContext}}
 
-            Generate the minimal safe PatchProposal. Human-facing fields must be concise Simplified Chinese.
+            Generate the minimal safe PatchProposal. Follow the patterns shown in the dynamic few-shot examples above.
+            Human-facing fields must be concise Simplified Chinese.
             """)
     PatchProposal generatePatchProposal(
             @V("plan") RepairPlan plan,
-            @V("sourceContext") String sourceContext);
+            @V("sourceContext") String sourceContext,
+            @V("fewShots") String fewShots);
 }

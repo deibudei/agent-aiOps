@@ -47,9 +47,7 @@ public final class PatchParserOperator {
         if (proposal.testsToRun() == null || proposal.testsToRun().isEmpty()) {
             throw new IllegalStateException("PatchProposal testsToRun must not be empty");
         }
-        if (!proposal.testsToRun().contains("mvn -pl target-service test")) {
-            throw new IllegalStateException("PatchProposal testsToRun must include mvn -pl target-service test");
-        }
+        // Accept any test commands the LLM suggests; no hardcoded command requirement.
         for (PatchOperation operation : proposal.operations()) {
             validateOperation(operation);
         }

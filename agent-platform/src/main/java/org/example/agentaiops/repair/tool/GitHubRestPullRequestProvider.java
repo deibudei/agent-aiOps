@@ -27,12 +27,16 @@ public class GitHubRestPullRequestProvider implements PullRequestProvider {
     private final GitRepoLocator gitRepoLocator;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final RepairWorkspaceContext workspaceContext;
 
     /** Wires REST API configuration and shared HttpClient. */
     @Autowired
     public GitHubRestPullRequestProvider(
-            RepairProperties properties, GitRepoLocator gitRepoLocator, ObjectMapper objectMapper) {
-        this(properties, gitRepoLocator, objectMapper,
+            RepairProperties properties,
+            GitRepoLocator gitRepoLocator,
+            ObjectMapper objectMapper,
+            RepairWorkspaceContext workspaceContext) {
+        this(properties, gitRepoLocator, objectMapper, workspaceContext,
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());
     }
 
@@ -41,11 +45,22 @@ public class GitHubRestPullRequestProvider implements PullRequestProvider {
             RepairProperties properties,
             GitRepoLocator gitRepoLocator,
             ObjectMapper objectMapper,
+            RepairWorkspaceContext workspaceContext,
             HttpClient httpClient) {
         this.properties = properties;
         this.gitRepoLocator = gitRepoLocator;
         this.objectMapper = objectMapper;
         this.httpClient = httpClient;
+        this.workspaceContext = workspaceContext;
+    }
+
+    /** Test-only constructor that injects a custom HttpClient. */
+    GitHubRestPullRequestProvider(
+            RepairProperties properties,
+            GitRepoLocator gitRepoLocator,
+            ObjectMapper objectMapper,
+            HttpClient httpClient) {
+        this(properties, gitRepoLocator, objectMapper, new RepairWorkspaceContext(), httpClient);
     }
 
     @Override
@@ -66,7 +81,7 @@ public class GitHubRestPullRequestProvider implements PullRequestProvider {
             return new PullRequestResult(false, "",
                     "Unable to determine GitHub owner/repo; set repair.github.owner/repo or origin remote");
         }
-        String baseBranch = properties.getGit().getBaseBranch();
+        String baseBranch = baseBranch();
         if (baseBranch == null || baseBranch.isBlank()) {
             return new PullRequestResult(false, "", "repair.git.base-branch is empty");
         }
@@ -113,6 +128,10 @@ public class GitHubRestPullRequestProvider implements PullRequestProvider {
         payload.put("body", body == null ? "" : body);
         payload.put("maintainer_can_modify", true);
         return objectMapper.writeValueAsString(payload);
+    }
+
+    private String baseBranch() {
+        return workspaceContext.activeBaseBranch().orElse(properties.getGit().getBaseBranch());
     }
 
     private PullRequestResult interpretResponse(HttpResponse<String> response) {

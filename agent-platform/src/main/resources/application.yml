@@ -58,3 +58,7 @@ repair:
     reflection-model: ${REPAIR_LLM_REFLECTION_MODEL:}
   agentic:
     file-read-cache-enabled: ${REPAIR_AGENTIC_FILE_READ_CACHE_ENABLED:true}
+  monitor:
+    enabled: ${REPAIR_MONITOR_ENABLED:false}
+    poll-interval-seconds: ${REPAIR_MONITOR_POLL_INTERVAL_SECONDS:30}
+    target-base-url: ${TARGET_SERVICE_BASE_URL:http://localhost:9910}
